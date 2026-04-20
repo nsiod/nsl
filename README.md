@@ -64,6 +64,34 @@ Set `NSL=0` or `NSL=skip` to opt out of registration for a single invocation.
 
 Commit that once and every contributor gets the same URL for the service.
 
+## Application lifecycle
+
+`nsl run [FLAGS] <CMD>...` connects an application process to the proxy in this order:
+
+1. Loads configuration from system, user, project, environment, then CLI flags.
+2. Resolves the route name and optional path prefix from `--name`, `package.json`, the Git root, or the cwd.
+3. Starts the proxy daemon if it is not running. Auto-start uses `[proxy].listen` and `NSL_LISTEN`; `--listen` is for explicit `nsl start` or `nsl reload`.
+4. Chooses the application port from `[app].port_range_start..port_range_end`, unless `--port` pins it.
+5. Prepares the child process by exporting `PORT`, `HOST`, `NSL_URL`, and `NSL=1`.
+6. Rewrites `NSL_PORT` placeholders in child command arguments, then optionally adds framework-specific port flags.
+7. Registers the route in `routes.json`, including the path prefix, `--strip`, and `--change-origin` options.
+8. Starts the child command, waits for the app port to accept connections, and prints the stable URL.
+9. Streams output until the child exits or you press Ctrl-C, then removes the route.
+
+`nsl route` is the manual path for services that are already running. It skips child process management and only writes or removes a route.
+
+## Inferred names
+
+When `--name` is omitted, `nsl run` derives the route name from the current directory context:
+
+1. The nearest `package.json` `name` field, walking up from the cwd. Scoped package names drop the scope: `@scope/shop` becomes `shop`.
+2. The Git repository root directory name.
+3. The current directory name, or `app` if the directory has no usable name.
+
+The chosen value is sanitized into a valid hostname label. In a Git multi-worktree checkout, non-default branches also prepend the sanitized last branch segment. For example, branch `feature/login` plus package `shop` becomes `login-shop.localhost`.
+
+Use `--name NAME` when you need a stable name that does not depend on the directory, package metadata, or branch.
+
 ## Port injection
 
 `nsl run` always exports these environment variables to the child process:
@@ -73,6 +101,7 @@ Commit that once and every contributor gets the same URL for the service.
 | `PORT`    | Allocated app port |
 | `HOST`    | `127.0.0.1` |
 | `NSL_URL` | Stable proxy URL |
+| `NSL`     | `1` |
 
 Most frameworks (Next.js, Express, Nuxt, Remix, Hono) already honor `PORT`.
 
@@ -94,7 +123,7 @@ nsl run ./server --addr 127.0.0.1:NSL_PORT
 nsl run ./server --listen=127.0.0.1:NSL_PORT
 ```
 
-`nsl` replaces `NSL_PORT` only in the child command arguments, after it allocates the app port. The `NSL_PORT` environment variable still configures the proxy port.
+`nsl` replaces `NSL_PORT` only in the child command arguments, after it allocates the app port.
 
 ## How it works
 
@@ -105,12 +134,13 @@ The proxy routes each request by two keys: **the hostname** (minus any configure
 nsl run --name shop            npm run web       # shop:/       -> :5173
 nsl run --name shop:/api       npm run api       # shop:/api/*  -> :4000
 nsl run --name shop:/docs      npm run docs      # shop:/docs/* -> :8000
+nsl run --name shop:/api --strip npm run api     # /api/users -> /users upstream
 ```
 
 ```mermaid
 flowchart LR
     B["Browser"]
-    P["nsl proxy :1355<br/>routes.json"]
+    P["proxy daemon :1355<br/>routes.json"]
     A1["shop :5173"]
     A2["api :4000"]
     A3["docs :8000"]
@@ -181,16 +211,34 @@ nsl hosts sync | clean         Sync route hostnames to /etc/hosts.
 | `-p, --port N`            | Pin the child to a fixed port.                            |
 | `-s, --strip`             | Strip the matched prefix before forwarding.               |
 | `-c, --change-origin`     | Rewrite the outgoing `Host` header to the target address. |
-| `--force`                 | Take over a route currently held by another process.      |
+| `-f, --force`             | Take over a route currently held by another process.      |
 
 ### `nsl start` flags
 
 | Flag             | Description                                        |
 | ---------------- | -------------------------------------------------- |
-| `--port N`       | Override `[proxy].port` (default `1355`).          |
-| `--bind ADDR`    | Override `[proxy].bind` (e.g. `0.0.0.0` for LAN).  |
+| `--listen ADDR`  | Override `[proxy].listen` (e.g. `127.0.0.1:1355` or `:1355`). |
 | `--https`        | Terminate TLS at the proxy.                        |
 | `--foreground`   | Stay in the current shell instead of daemonizing.  |
+
+Use `NSL_LISTEN=ADDR` when starting or reloading the proxy from scripts:
+
+```bash
+NSL_LISTEN=127.0.0.1:1355 nsl start
+NSL_LISTEN=:1355 nsl reload
+```
+
+### Proxy logs
+
+`nsl logs` reads the proxy daemon log at `state_dir/proxy.log`.
+
+```bash
+nsl logs
+nsl logs -n 100
+nsl logs --follow
+```
+
+Application output from `nsl run` is streamed to the current terminal and is not persisted by `nsl`.
 
 ### Static routes for non-`nsl` processes
 
@@ -202,11 +250,28 @@ nsl route api:/v1 3001 --strip  # strip /v1 before forwarding
 nsl route api --remove
 ```
 
+`NAME:/PATH` mounts the target under a path prefix on the same hostname. Add
+`--strip` when the upstream expects root-relative paths: `/v1/users` reaches the
+target as `/users`.
+
+| Flag                  | Description                                               |
+| --------------------- | --------------------------------------------------------- |
+| `--remove`            | Remove the route.                                         |
+| `-f, --force`         | Replace an existing route.                                |
+| `-s, --strip`         | Strip the matched path prefix before forwarding.          |
+| `-c, --change-origin` | Rewrite the outgoing `Host` header to the target address. |
+
 > **Reserved words:** `run`, `start`, `stop`, `reload`, `logs`, `route`, `get`, `list`, `status`, `trust`, `hosts`. Use `nsl run --name <name> <cmd>` if a reserved word collides with your project name.
 
 ## Configuration
 
-Merged lowest → highest:
+Configuration has three scopes:
+
+- **Proxy scope** (`[proxy]`) controls the front proxy itself: where it listens, whether it terminates HTTPS, which domain suffixes it accepts, and how URLs are displayed.
+- **Application scope** (`[app]`) controls how `nsl run` allocates ports for child processes.
+- **State scope** (`[paths]`) controls where runtime state such as routes, logs, PID files, and certificates are stored.
+
+Configuration is merged lowest → highest:
 
 1. `/etc/nsl/config.toml` (system)
 2. `~/.nsl/config.toml` (user)
@@ -214,19 +279,20 @@ Merged lowest → highest:
 4. `NSL_*` environment variables
 5. CLI flags
 
-Full template in [`config.example.toml`](./config.example.toml). Minimal:
+Full template in [`config.example.toml`](./config.example.toml).
+
+### Minimal config
 
 ```toml
 [proxy]
-port = 1355
-bind = "127.0.0.1"
+listen = "127.0.0.1:1355"
 https = false
 domains = ["localhost", "dev.local"]
 # max_hops = 5   # loop-detection cap
 
 # Override URL display when an external reverse proxy fronts this domain.
 # (Affects `nsl get` / `nsl status` output only; doesn't change routing.)
-[proxy.domain."dev.example.com"]
+[proxy.display."dev.example.com"]
 https = true
 # port = 443
 
@@ -238,13 +304,53 @@ port_range_end   = 9999
 # state_dir = "/absolute/path/to/nsl-state"
 ```
 
+### Proxy settings
+
+`[proxy].listen` configures the proxy's own listening socket. It is separate from the app port that `nsl run` allocates for the child process.
+
+```toml
+[proxy]
+listen = "127.0.0.1:1355"  # loopback only
+# listen = ":1355"         # all IPv4 interfaces
+https = false
+domains = ["localhost", "dev.local"]
+```
+
+Override it at proxy startup with either a flag or environment variable:
+
+```bash
+nsl start --listen 127.0.0.1:8080
+NSL_LISTEN=:1355 nsl reload
+```
+
+`[proxy].domains` controls which suffixes the proxy recognizes. `.localhost` usually resolves automatically. Other suffixes often need `sudo nsl hosts sync` or local DNS.
+
+Domain display overrides affect generated URLs from `nsl get` and `nsl status`; they do not change route matching:
+
+```toml
+[proxy.display."dev.example.com"]
+https = true
+port = 443
+```
+
+### Application settings
+
+`[app]` controls the app port pool used by `nsl run`.
+
+```toml
+[app]
+port_range_start = 3000
+port_range_end = 9999
+```
+
+For each `nsl run`, the selected app port is passed to the child process through `PORT`, and can also be inserted into command arguments with the literal `NSL_PORT` placeholder. Use `nsl run --port N` only when the child process must use a fixed port.
+
 ### Environment
 
 | Variable        | Purpose                                 |
 | --------------- | --------------------------------------- |
-| `NSL_PORT`      | Proxy port.                             |
+| `NSL_LISTEN`    | Proxy listen address (e.g. `127.0.0.1:1355` or `:1355`). |
 | `NSL_HTTPS`     | `1` / `true` enables HTTPS.             |
-| `NSL_BIND`      | Bind address (e.g. `0.0.0.0`).          |
 | `NSL_DOMAINS`   | Comma-separated allowed domain suffixes.|
 | `NSL_STATE_DIR` | Override the state directory.           |
 
@@ -313,7 +419,7 @@ If you plan to use HTTPS again afterward, re-run `sudo nsl trust` — the old CA
 ## Troubleshooting
 
 - **"proxy is not running"** after `nsl route` — `nsl run` auto-starts the proxy, but `nsl route` does not. Run `nsl start` once.
-- **Port already in use** — something else holds `1355`. Change with `nsl start --port 8080` or `[proxy].port = 8080`.
+- **Port already in use** — something else holds `1355`. Change with `nsl start --listen 127.0.0.1:8080` or `[proxy].listen = "127.0.0.1:8080"`.
 - **`.localhost` doesn't resolve on Linux** — glibc resolves `*.localhost` by default, but a few minimal distros strip the rule. Either restore it in `/etc/nsswitch.conf` or switch to `sudo nsl hosts sync` with a custom suffix.
 - **Browser says the HTTPS cert isn't trusted** — run `sudo nsl trust`. For Firefox on Linux, import the CA manually (Firefox uses its own NSS database).
 - **WebSocket / HTTP/2** — transparently upgraded; no special flag.

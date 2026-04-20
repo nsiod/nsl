@@ -8,15 +8,14 @@ Rust toolchain or post-install download needed.
 ## Install
 
 ```bash
-npm install --save-dev @nsio/nsl
-# or add to a package's deps so it's available in node_modules/.bin
+npm install -g @nsio/nsl
 ```
 
 ## Use
 
 ```bash
-npx nsl start
-npx nsl run --name myapp -- bun dev
+nsl start
+nsl run --name myapp -- bun dev
 ```
 
 See the [project README](https://github.com/nsiod/nsl) for full documentation.

@@ -23,10 +23,10 @@ describe("CLI commands", () => {
     cleanupStateDir(stateDir);
   });
 
-  test("nsl config prints resolved configuration", async () => {
-    const result = await nsl(["config"], stateDir, proxyPort);
+  test("nsl status prints resolved configuration", async () => {
+    const result = await nsl(["status"], stateDir, proxyPort);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("proxy.port:");
+    expect(result.stdout).toContain("proxy.listen:");
     expect(result.stdout).toContain(String(proxyPort));
     expect(result.stdout).toContain("proxy.https:");
     expect(result.stdout).toContain("localhost");

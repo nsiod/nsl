@@ -7,8 +7,8 @@ name: Release
 #   Unix:    nsl-<version>-<subpkg>.tar.gz   (contains ./nsl)
 #   Windows: nsl-<version>-<subpkg>.zip      (contains nsl.exe)
 #
-# Downstream: the `npm` workflow runs on `release: published` and fetches
-# these assets to assemble npm platform subpackages.
+# Downstream: run the manual `npm` workflow with this tag to publish npm
+# platform subpackages from these release assets.
 on:
   push:
     tags:

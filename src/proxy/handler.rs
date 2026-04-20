@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use http_body_util::{BodyExt, Full};
-use hyper::body::{Bytes, Incoming};
+use http_body_util::BodyExt;
+use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
 
 use crate::pages;
@@ -9,8 +9,8 @@ use crate::routes::RouteMapping;
 
 use super::websocket::{handle_upgrade, is_upgrade_request};
 use super::{
-    NSL_HEADER, NSL_HOPS_HEADER, RouteCache, html_response, path_matches_prefix, response,
-    strip_path_prefix,
+    NSL_HEADER, NSL_HOPS_HEADER, ProxyBody, RouteCache, html_response, path_matches_prefix,
+    response, strip_path_prefix,
 };
 
 // ---------------------------------------------------------------------------
@@ -120,16 +120,16 @@ fn build_forwarded_path_and_query(
 }
 
 /// Build the forwarded HTTP request with rewritten headers.
-fn build_forwarded_request(
+fn build_forwarded_request<B>(
     parts: &hyper::http::request::Parts,
     target_uri: &str,
     host: &str,
     proxy_port: u16,
     hops: u32,
     route: &RouteMapping,
-    body_bytes: Bytes,
+    body: B,
     is_tls: bool,
-) -> Request<Full<Bytes>> {
+) -> Result<Request<B>, hyper::http::Error> {
     let mut proxy_req = Request::builder()
         .method(parts.method.clone())
         .uri(target_uri);
@@ -172,7 +172,7 @@ fn build_forwarded_request(
         .header(NSL_HOPS_HEADER, (hops + 1).to_string())
         .header(NSL_HEADER, "1");
 
-    proxy_req.body(Full::new(body_bytes)).unwrap()
+    proxy_req.body(body)
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +186,7 @@ pub(super) async fn handle_request(
     route_cache: RouteCache,
     domains: Arc<Vec<String>>,
     is_tls: bool,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> Result<Response<ProxyBody>, hyper::Error> {
     let host = extract_host(&req);
     if host.is_empty() {
         return Ok(response(StatusCode::BAD_REQUEST, "Missing Host header"));
@@ -224,37 +224,44 @@ pub(super) async fn handle_request(
         .build_http();
 
     let (parts, body) = req.into_parts();
-    let body_bytes = body
-        .collect()
-        .await
-        .map(|c| c.to_bytes())
-        .unwrap_or_default();
-
-    let proxy_req = build_forwarded_request(
+    let proxy_req = match build_forwarded_request(
         &parts,
         &target_uri,
         &host,
         proxy_port,
         hops,
         route,
-        body_bytes,
+        body,
         is_tls,
-    );
+    ) {
+        Ok(req) => req,
+        Err(e) => {
+            tracing::warn!("failed to build forwarded request: {e}");
+            return Ok(response(
+                StatusCode::BAD_REQUEST,
+                "Invalid request headers or target URI.",
+            ));
+        }
+    };
 
     match client.request(proxy_req).await {
         Ok(resp) => {
             let (parts, body) = resp.into_parts();
-            let body_bytes = body
-                .collect()
-                .await
-                .map(|c| c.to_bytes())
-                .unwrap_or_default();
-            let mut response = Response::builder().status(parts.status);
+            let mut builder = Response::builder().status(parts.status);
             for (key, value) in &parts.headers {
-                response = response.header(key, value);
+                builder = builder.header(key, value);
             }
-            response = response.header(NSL_HEADER, "1");
-            Ok(response.body(Full::new(body_bytes)).unwrap())
+            builder = builder.header(NSL_HEADER, "1");
+            match builder.body(body.boxed()) {
+                Ok(resp) => Ok(resp),
+                Err(e) => {
+                    tracing::warn!("failed to build forwarded response: {e}");
+                    Ok(response(
+                        StatusCode::BAD_GATEWAY,
+                        "Invalid upstream response headers.",
+                    ))
+                }
+            }
         }
         Err(_) => {
             let body_html = pages::render_bad_gateway_body(&host, route.port);
@@ -271,6 +278,7 @@ pub(super) async fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hyper::body::Bytes;
 
     fn test_route(hostname: &str, port: u16) -> RouteMapping {
         RouteMapping {
@@ -357,7 +365,8 @@ mod tests {
             &route,
             Bytes::new(),
             false,
-        );
+        )
+        .unwrap();
         assert_eq!(
             proxy_req.headers().get(hyper::header::HOST).unwrap(),
             "access.a.fr.ds.cc:1355"

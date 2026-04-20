@@ -1,14 +1,17 @@
 mod handler;
 
-use std::net::IpAddr;
-
 use clap::{Parser, Subcommand};
 
 use crate::config::Config;
 
 /// Replace port numbers with stable, named .localhost URLs.
 #[derive(Parser)]
-#[command(name = "nsl", version, about)]
+#[command(
+    name = "nsl",
+    version,
+    about,
+    after_help = "Documentation:\n  README: https://github.com/nsiod/nsl/blob/main/README.md\n  AI usage guide: https://github.com/nsiod/nsl/blob/main/llms.txt"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub(super) command: Commands,
@@ -18,7 +21,7 @@ pub struct Cli {
 pub(super) enum Commands {
     /// Infer name from project and run through proxy
     #[command(
-        after_help = "Port placeholder:\n  Use NSL_PORT in child command arguments when a CLI does not read PORT.\n  Example: nsl run ./server --port NSL_PORT\n  The NSL_PORT environment variable still configures the proxy port."
+        after_help = "Port placeholder:\n  Use NSL_PORT in child command arguments when a CLI does not read PORT.\n  Example: nsl run ./server --port NSL_PORT"
     )]
     Run {
         /// Command and arguments to run
@@ -35,7 +38,7 @@ pub(super) enum Commands {
         app_port: Option<u16>,
 
         /// Override a route registered by another process
-        #[arg(long)]
+        #[arg(short, long)]
         force: bool,
 
         /// Rewrite Host header to target address
@@ -48,14 +51,13 @@ pub(super) enum Commands {
     },
 
     /// Start the proxy server
+    #[command(
+        after_help = "Proxy listen address:\n  Use --listen ADDR or NSL_LISTEN=ADDR to configure where the proxy listens.\n  Examples: nsl start --listen 127.0.0.1:1355\n            NSL_LISTEN=:1355 nsl start"
+    )]
     Start {
-        /// Port for the proxy (default: from config or 1355)
+        /// Listen address for the proxy (e.g. 127.0.0.1:1355 or :1355)
         #[arg(short, long)]
-        port: Option<u16>,
-
-        /// IP address to bind on (e.g. 0.0.0.0 to accept LAN traffic)
-        #[arg(long, value_name = "IP")]
-        bind: Option<IpAddr>,
+        listen: Option<String>,
 
         /// Enable HTTPS/HTTP2
         #[arg(long)]
@@ -74,14 +76,13 @@ pub(super) enum Commands {
     Stop,
 
     /// Restart the proxy server (stop then start)
+    #[command(
+        after_help = "Proxy listen address:\n  Use --listen ADDR or NSL_LISTEN=ADDR to configure where the proxy listens.\n  Examples: nsl reload --listen 127.0.0.1:1355\n            NSL_LISTEN=:1355 nsl reload"
+    )]
     Reload {
-        /// Port for the proxy (default: from config or 1355)
+        /// Listen address for the proxy (e.g. 127.0.0.1:1355 or :1355)
         #[arg(short, long)]
-        port: Option<u16>,
-
-        /// IP address to bind on (e.g. 0.0.0.0 to accept LAN traffic)
-        #[arg(long, value_name = "IP")]
-        bind: Option<IpAddr>,
+        listen: Option<String>,
 
         /// Enable HTTPS/HTTP2
         #[arg(long)]
@@ -104,6 +105,9 @@ pub(super) enum Commands {
     },
 
     /// Register a static route (e.g. for Docker)
+    #[command(
+        after_help = "Examples:\n  nsl route api 3001\n  nsl route shop:/api 3001 --strip\n  nsl route api --remove\n\nPath prefixes:\n  NAME:/PATH mounts a service under one host.\n  --strip removes the matched prefix before forwarding, so /api/users becomes /users."
+    )]
     Route {
         /// App name, optionally with a path prefix (e.g. `myapp` or `myapp:/api`)
         name: Option<String>,
@@ -116,7 +120,7 @@ pub(super) enum Commands {
         remove: bool,
 
         /// Override an existing route
-        #[arg(long)]
+        #[arg(short, long)]
         force: bool,
 
         /// Rewrite Host header to target address
@@ -161,19 +165,24 @@ pub(super) enum HostsAction {
 /// Apply CLI flag overrides to a config.
 pub(super) fn apply_cli_overrides(
     config: &mut Config,
-    port: Option<u16>,
+    listen: Option<String>,
     https: bool,
-    bind: Option<IpAddr>,
-) {
-    if let Some(p) = port {
-        config.proxy_port = p;
+) -> anyhow::Result<()> {
+    if let Some(raw) = listen {
+        match crate::config::parse_listen(&raw) {
+            Ok((bind, port)) => {
+                config.proxy_bind = bind;
+                config.proxy_port = port;
+            }
+            Err(e) => {
+                anyhow::bail!("invalid --listen '{}': {}", raw, e);
+            }
+        }
     }
     if https {
         config.proxy_https = true;
     }
-    if let Some(b) = bind {
-        config.proxy_bind = b;
-    }
+    Ok(())
 }
 
 impl Cli {
@@ -198,5 +207,62 @@ mod tests {
 
         assert!(help.contains("NSL_PORT"));
         assert!(help.contains("child command arguments"));
+    }
+
+    #[test]
+    fn test_start_help_shows_listen_env() {
+        let mut command = Cli::command();
+        let start = command.find_subcommand_mut("start").unwrap();
+        let mut help = Vec::new();
+
+        start.write_help(&mut help).unwrap();
+        let help = String::from_utf8(help).unwrap();
+
+        assert!(help.contains("NSL_LISTEN"));
+        assert!(help.contains("nsl start --listen 127.0.0.1:1355"));
+    }
+
+    #[test]
+    fn test_help_shows_readme_url() {
+        let mut command = Cli::command();
+        let mut help = Vec::new();
+
+        command.write_help(&mut help).unwrap();
+        let help = String::from_utf8(help).unwrap();
+
+        assert!(help.contains("Documentation:"));
+        assert!(help.contains("https://github.com/nsiod/nsl/blob/main/README.md"));
+        assert!(help.contains("https://github.com/nsiod/nsl/blob/main/llms.txt"));
+    }
+
+    #[test]
+    fn test_route_help_shows_examples_and_strip() {
+        let mut command = Cli::command();
+        let route = command.find_subcommand_mut("route").unwrap();
+        let mut help = Vec::new();
+
+        route.write_help(&mut help).unwrap();
+        let help = String::from_utf8(help).unwrap();
+
+        assert!(help.contains("nsl route api 3001"));
+        assert!(help.contains("nsl route shop:/api 3001 --strip"));
+        assert!(help.contains("/api/users becomes /users"));
+    }
+
+    #[test]
+    fn test_force_has_short_flag() {
+        let mut command = Cli::command();
+
+        let run = command.find_subcommand_mut("run").unwrap();
+        let mut run_help = Vec::new();
+        run.write_help(&mut run_help).unwrap();
+        let run_help = String::from_utf8(run_help).unwrap();
+        assert!(run_help.contains("-f, --force"));
+
+        let route = command.find_subcommand_mut("route").unwrap();
+        let mut route_help = Vec::new();
+        route.write_help(&mut route_help).unwrap();
+        let route_help = String::from_utf8(route_help).unwrap();
+        assert!(route_help.contains("-f, --force"));
     }
 }

@@ -1,0 +1,245 @@
+# nsl usage guide for AI agents
+
+`nsl` replaces unstable local development ports with stable named localhost URLs.
+It runs one local proxy and routes requests by host name and optional path prefix.
+
+Primary docs:
+
+- README: https://github.com/nsiod/nsl/blob/main/README.md
+- Repository: https://github.com/nsiod/nsl
+
+## Install and invocation
+
+Install from npm:
+
+```bash
+npm install -g @nsio/nsl
+```
+
+Use the installed binary directly:
+
+```bash
+nsl --help
+```
+
+Avoid `npx nsl` or `pnpm dlx nsl` for daemon workflows. Temporary package
+paths can break the background proxy process after the package runner exits.
+
+## Common commands
+
+Start an app behind the proxy:
+
+```bash
+nsl run npm run dev
+```
+
+Use an explicit service name:
+
+```bash
+nsl run --name web npm run dev
+```
+
+Mount services under one host with path prefixes:
+
+```bash
+nsl run --name shop npm run web
+nsl run --name shop:/api npm run api
+nsl run --name shop:/docs npm run docs
+```
+
+Use `--strip` when the upstream service is mounted under a prefix but expects
+root-relative paths:
+
+```bash
+nsl run --name shop:/api --strip npm run api
+```
+
+With `--strip`, a browser request for `/api/users` is forwarded to the upstream
+as `/users`. Without `--strip`, the upstream receives `/api/users`.
+
+Print the stable URL for automation:
+
+```bash
+nsl get shop
+nsl get shop:/api
+```
+
+Show proxy and route state:
+
+```bash
+nsl status
+nsl list
+```
+
+Read proxy daemon logs:
+
+```bash
+nsl logs
+nsl logs -n 100
+nsl logs --follow
+```
+
+`nsl logs` reads only `state_dir/proxy.log`. `nsl run` streams application
+output to the current terminal and does not persist per-application logs.
+
+Register an already-running service:
+
+```bash
+nsl route api 3001
+nsl route api:/v1 3001 --strip
+nsl route api --remove
+```
+
+Use `nsl route` for services not launched by `nsl run`, such as a Docker
+container, a compiled server binary, or a service started by another tool. The
+first argument is `NAME` or `NAME:/PATH`, and the second argument is the target
+port on `127.0.0.1`.
+
+## Application lifecycle
+
+For `nsl run [flags] <cmd>...`, reason about the flow in this order:
+
+1. Load config from system, user, project, environment, then CLI flags.
+2. Resolve the route name and optional path prefix.
+3. Start the proxy daemon if needed. Auto-start uses `[proxy].listen` and
+   `NSL_LISTEN`; `--listen` is for explicit `nsl start` or `nsl reload`.
+4. Allocate the app port from `[app].port_range_start..port_range_end`, unless
+   `--port` pins it.
+5. Export child env vars: `PORT`, `HOST`, `NSL_URL`, and `NSL=1`.
+6. Replace `NSL_PORT` placeholders in child command arguments.
+7. Append recognized framework port flags when safe.
+8. Register the route in `routes.json`, including path prefix, `--strip`, and
+   `--change-origin` options.
+9. Start the child command, wait for the app port, print the stable URL, stream
+   output, and remove the route on exit.
+
+`nsl route` skips child process management and only creates or removes a route
+for an already-running service.
+
+## Inferred names
+
+When `--name` is omitted, `nsl run` infers the route name in this order:
+
+1. Nearest `package.json` `name`, walking up from the cwd.
+   Scoped package names drop the scope: `@scope/shop` becomes `shop`.
+2. Git repository root directory name.
+3. Current directory name, falling back to `app`.
+
+The result is sanitized into a valid hostname label. In a Git multi-worktree
+checkout, non-default branches prepend the sanitized last branch segment. For
+example, branch `feature/login` plus package `shop` becomes
+`login-shop.localhost`.
+
+Use `--name NAME` when automation needs a stable name independent of directories,
+package metadata, or branch names.
+
+## Port injection
+
+`nsl run` chooses an app port from the configured range unless `--port` is
+provided. It always injects these environment variables into the child process:
+
+- `PORT`: allocated app port
+- `HOST`: `127.0.0.1`
+- `NSL_URL`: stable proxy URL
+- `NSL`: `1`
+
+Most web frameworks already read `PORT`.
+
+For recognized CLIs, `nsl` may append framework-specific arguments:
+
+- Commands containing `vite` or `react-router`: `--port <port> --strictPort --host 127.0.0.1`
+- Commands containing `astro`, ` ng `, or `react-native`: `--port <port> --host 127.0.0.1`
+- Commands containing `expo`: `--port <port> --host localhost`
+
+If the command already contains `--port` or `--host`, `nsl` does not override
+that option.
+
+For unknown CLIs that do not read `PORT`, pass the allocated app port with the
+literal `NSL_PORT` argument placeholder:
+
+```bash
+nsl run ./server --port NSL_PORT
+nsl run ./server --addr 127.0.0.1:NSL_PORT
+nsl run ./server --listen=127.0.0.1:NSL_PORT
+```
+
+`nsl` replaces `NSL_PORT` only in child command arguments after allocating the
+app port.
+
+Do not combine inconsistent app ports, such as:
+
+```bash
+nsl run --port 4000 vite --port 5173
+```
+
+In that case `nsl` registers and waits for `4000`, while the app may listen on
+`5173`.
+
+## Proxy configuration
+
+Configuration scopes:
+
+- `[proxy]`: proxy daemon settings such as `listen`, `https`, `domains`, and
+  domain display overrides.
+- `[app]`: app port range used by `nsl run`.
+- `[paths]`: state directory for routes, logs, PID files, and certificates.
+
+Useful environment variables:
+
+- `NSL_LISTEN`: proxy listen address, default `127.0.0.1:1355`; use `:1355` to listen on all IPv4 interfaces
+- `NSL_HTTPS`: set to `1` or `true` to enable HTTPS
+- `NSL_DOMAINS`: comma-separated domain suffixes
+- `NSL_STATE_DIR`: state directory override
+
+Use `NSL_LISTEN` when starting or reloading the proxy itself:
+
+```bash
+NSL_LISTEN=127.0.0.1:18555 nsl start
+NSL_LISTEN=:1355 nsl reload
+```
+
+Use `NSL_STATE_DIR` in tests and automation to avoid touching a user's default
+state:
+
+```bash
+NSL_STATE_DIR="$(mktemp -d)" NSL_LISTEN=127.0.0.1:18555 nsl run --name smoke npm run dev
+```
+
+Set `NSL=0` or `NSL=skip` to run the child command directly while still setting
+`PORT` from config.
+
+## URLs and routing
+
+Default proxy URL form:
+
+```text
+http://<name>.localhost:1355
+```
+
+Path-prefixed routes use longest-prefix matching:
+
+- `shop:/` handles `/cart`
+- `shop:/api` handles `/api` and `/api/users`
+- `shop:/api/internal` takes precedence over `shop:/api`
+
+Use `--strip` when the upstream service should receive paths without the mount
+prefix.
+
+## HTTPS and hosts
+
+Install the local CA once before using HTTPS:
+
+```bash
+sudo nsl trust
+nsl start --https
+```
+
+For suffixes that do not resolve like `.localhost`, sync hosts entries:
+
+```bash
+sudo nsl hosts sync
+sudo nsl hosts clean
+```
+
+Only run host and trust commands when the user explicitly wants system-level
+changes.

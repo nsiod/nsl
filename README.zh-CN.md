@@ -64,6 +64,34 @@ nsl run npm run dev
 
 提交一次,所有协作者都用同一个 URL。
 
+## 应用启动全流程
+
+`nsl run [参数] <命令>...` 会按这个顺序把应用接到代理后面:
+
+1. 从系统、用户、项目、环境变量、CLI 参数加载并合并配置。
+2. 从 `--name`、`package.json`、Git 根目录或当前目录解析路由名和可选路径前缀。
+3. 如果代理守护进程没在运行,先启动代理。自动启动时使用 `[proxy].listen` 和 `NSL_LISTEN`;`--listen` 用于显式执行 `nsl start` 或 `nsl reload`。
+4. 从 `[app].port_range_start..port_range_end` 里挑应用端口,除非 `--port` 指定了固定端口。
+5. 准备子进程环境变量: `PORT`、`HOST`、`NSL_URL`、`NSL=1`。
+6. 替换子命令参数里的 `NSL_PORT` 字面量,然后按识别到的框架追加端口参数。
+7. 把路由写入 `routes.json`,包括路径前缀、`--strip`、`--change-origin` 选项。
+8. 启动子命令,等待应用端口可连接,然后输出稳定 URL。
+9. 持续转发输出直到子进程退出或你按 Ctrl-C,最后移除路由。
+
+`nsl route` 是给已运行服务用的手动路径。它不管理子进程,只写入或删除路由。
+
+## 自动推断名称
+
+没有传 `--name` 时,`nsl run` 会从当前目录上下文推断路由名:
+
+1. 从当前目录向上查找最近的 `package.json` `name` 字段。带 scope 的包名会去掉 scope:`@scope/shop` 变成 `shop`。
+2. Git 仓库根目录名。
+3. 当前目录名;如果目录名不可用,退回 `app`。
+
+选中的值会清理成合法 hostname label。在 Git multi-worktree 里,非默认分支还会把分支最后一段清理后加到前面。例如分支 `feature/login` 加 package `shop` 会得到 `login-shop.localhost`。
+
+如果你需要不受目录、package 元数据或分支影响的固定名称,使用 `--name NAME`。
+
 ## 端口注入
 
 `nsl run` 总会给子进程注入这些环境变量:
@@ -73,6 +101,7 @@ nsl run npm run dev
 | `PORT`    | 自动分配的应用端口 |
 | `HOST`    | `127.0.0.1` |
 | `NSL_URL` | 稳定代理 URL |
+| `NSL`     | `1` |
 
 大部分框架(Next.js、Express、Nuxt、Remix、Hono)自动识别 `PORT`。
 
@@ -94,7 +123,7 @@ nsl run ./server --addr 127.0.0.1:NSL_PORT
 nsl run ./server --listen=127.0.0.1:NSL_PORT
 ```
 
-`nsl` 会在分配应用端口后,只替换子命令参数里的 `NSL_PORT` 字面量。`NSL_PORT` 环境变量仍然表示代理端口。
+`nsl` 会在分配应用端口后,只替换子命令参数里的 `NSL_PORT` 字面量。
 
 ## 工作原理
 
@@ -105,6 +134,7 @@ nsl run ./server --listen=127.0.0.1:NSL_PORT
 nsl run --name shop            npm run web       # shop:/       -> :5173
 nsl run --name shop:/api       npm run api       # shop:/api/*  -> :4000
 nsl run --name shop:/docs      npm run docs      # shop:/docs/* -> :8000
+nsl run --name shop:/api --strip npm run api     # 上游收到 /users 而不是 /api/users
 ```
 
 ```mermaid
@@ -181,16 +211,34 @@ nsl hosts sync | clean         同步路由主机名到 /etc/hosts。
 | `-p, --port N`            | 把子进程钉到固定端口。                                  |
 | `-s, --strip`             | 转发前剥掉匹配到的前缀。                                |
 | `-c, --change-origin`     | 把外发请求的 `Host` 头改写为目标地址。                  |
-| `--force`                 | 抢走别的进程正在占着的同名路由。                        |
+| `-f, --force`             | 抢走别的进程正在占着的同名路由。                        |
 
 ### `nsl start` 参数
 
 | 参数             | 说明                                              |
 | ---------------- | ------------------------------------------------- |
-| `--port N`       | 覆盖 `[proxy].port`(默认 `1355`)。                |
-| `--bind ADDR`    | 覆盖 `[proxy].bind`(局域网监听用 `0.0.0.0`)。     |
+| `--listen ADDR`  | 覆盖 `[proxy].listen`(如 `127.0.0.1:1355` 或 `:1355`)。 |
 | `--https`        | 代理层终结 TLS。                                  |
 | `--foreground`   | 前台运行,不守护化。                              |
+
+从脚本启动或重载代理时,也可以用 `NSL_LISTEN=ADDR`:
+
+```bash
+NSL_LISTEN=127.0.0.1:1355 nsl start
+NSL_LISTEN=:1355 nsl reload
+```
+
+### 代理日志
+
+`nsl logs` 读取代理守护进程日志,位置是 `state_dir/proxy.log`。
+
+```bash
+nsl logs
+nsl logs -n 100
+nsl logs --follow
+```
+
+`nsl run` 的应用输出只转发到当前终端,`nsl` 不持久化应用日志。
 
 ### 给非 `nsl` 启动的进程注册路由
 
@@ -202,11 +250,27 @@ nsl route api:/v1 3001 --strip  # 转发前剥掉 /v1
 nsl route api --remove
 ```
 
+`NAME:/PATH` 会把目标服务挂到同一个主机名的路径前缀下。上游服务只认识根路径时加
+`--strip`: `/v1/users` 会以 `/users` 转发给目标服务。
+
+| 参数                  | 说明                                      |
+| --------------------- | ----------------------------------------- |
+| `--remove`            | 移除路由。                                |
+| `-f, --force`         | 替换已有路由。                            |
+| `-s, --strip`         | 转发前剥掉匹配到的路径前缀。              |
+| `-c, --change-origin` | 把外发请求的 `Host` 头改写为目标地址。    |
+
 > **保留字:** `run`、`start`、`stop`、`reload`、`logs`、`route`、`get`、`list`、`status`、`trust`、`hosts`。项目名不巧撞到保留字,用 `nsl run --name <name> <cmd>`。
 
 ## 配置
 
-按优先级从低到高合并:
+配置分为三个作用域:
+
+- **代理作用域**(`[proxy]`)控制前置代理本身:监听地址、HTTPS、允许的域名后缀、URL 显示方式。
+- **应用作用域**(`[app]`)控制 `nsl run` 如何给子进程分配端口。
+- **状态作用域**(`[paths]`)控制路由、日志、PID 文件、证书等运行时状态保存在哪里。
+
+配置按优先级从低到高合并:
 
 1. `/etc/nsl/config.toml`(系统)
 2. `~/.nsl/config.toml`(用户)
@@ -214,19 +278,20 @@ nsl route api --remove
 4. `NSL_*` 环境变量
 5. CLI 参数
 
-完整模板见 [`config.example.toml`](./config.example.toml)。最小示例:
+完整模板见 [`config.example.toml`](./config.example.toml)。
+
+### 最小配置
 
 ```toml
 [proxy]
-port = 1355
-bind = "127.0.0.1"
+listen = "127.0.0.1:1355"
 https = false
 domains = ["localhost", "dev.local"]
 # max_hops = 5   # 循环检测上限
 
 # 域名被外部反向代理托管时,覆盖 URL 显示
 #(仅影响 `nsl get` / `nsl status` 的输出,不影响路由)
-[proxy.domain."dev.example.com"]
+[proxy.display."dev.example.com"]
 https = true
 # port = 443
 
@@ -238,13 +303,53 @@ port_range_end   = 9999
 # state_dir = "/absolute/path/to/nsl-state"
 ```
 
+### 代理配置
+
+`[proxy].listen` 配置的是代理自己的监听地址。它和 `nsl run` 分配给子进程的应用端口是两回事。
+
+```toml
+[proxy]
+listen = "127.0.0.1:1355"  # 只监听本机回环地址
+# listen = ":1355"         # 监听全部 IPv4 网卡
+https = false
+domains = ["localhost", "dev.local"]
+```
+
+启动或重载代理时可以用 CLI 参数或环境变量覆盖:
+
+```bash
+nsl start --listen 127.0.0.1:8080
+NSL_LISTEN=:1355 nsl reload
+```
+
+`[proxy].domains` 控制代理识别哪些域名后缀。`.localhost` 通常自动解析。其他后缀一般需要 `sudo nsl hosts sync` 或本地 DNS。
+
+域名显示覆盖只影响 `nsl get` 和 `nsl status` 生成的 URL,不改变路由匹配:
+
+```toml
+[proxy.display."dev.example.com"]
+https = true
+port = 443
+```
+
+### 应用配置
+
+`[app]` 控制 `nsl run` 使用的应用端口池。
+
+```toml
+[app]
+port_range_start = 3000
+port_range_end = 9999
+```
+
+每次 `nsl run` 选出的应用端口都会通过 `PORT` 传给子进程,也可以用 `NSL_PORT` 字面量插入到子命令参数里。只有子进程必须固定端口时才使用 `nsl run --port N`。
+
 ### 环境变量
 
 | 变量            | 作用                                |
 | --------------- | ----------------------------------- |
-| `NSL_PORT`      | 代理端口。                          |
+| `NSL_LISTEN`    | 代理监听地址(如 `127.0.0.1:1355` 或 `:1355`)。 |
 | `NSL_HTTPS`     | `1` / `true` 启用 HTTPS。           |
-| `NSL_BIND`      | 绑定地址(如 `0.0.0.0`)。           |
 | `NSL_DOMAINS`   | 逗号分隔的允许域名后缀。            |
 | `NSL_STATE_DIR` | 覆盖状态目录。                      |
 
@@ -313,7 +418,7 @@ npm uninstall -g @nsio/nsl
 ## 常见问题
 
 - **`nsl route` 报 "proxy is not running"** —— `nsl run` 会自动启动,但 `nsl route` 不会。先跑一次 `nsl start`。
-- **端口被占用** —— 别的进程占了 `1355`。`nsl start --port 8080` 或在配置里改 `[proxy].port = 8080`。
+- **端口被占用** —— 别的进程占了 `1355`。改用 `nsl start --listen 127.0.0.1:8080` 或在配置里设 `[proxy].listen = "127.0.0.1:8080"`。
 - **Linux 上 `.localhost` 解析失败** —— glibc 默认支持 `*.localhost`,某些极简发行版裁掉了。要么在 `/etc/nsswitch.conf` 里补上,要么改用自定义域名后缀 + `sudo nsl hosts sync`。
 - **浏览器说 HTTPS 证书不受信任** —— 跑 `sudo nsl trust`。Linux 上的 Firefox 用自己的 NSS 信任库,手动导入 CA。
 - **WebSocket / HTTP/2** —— 透明升级,不需要额外参数。

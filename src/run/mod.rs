@@ -25,7 +25,7 @@ pub fn is_nsl_disabled() -> bool {
 /// Build a `tokio::process::Command` that runs the given args through the
 /// platform's default shell (`sh -c` on Unix, `cmd /C` on Windows).
 fn shell_command(args: &[String]) -> tokio::process::Command {
-    let joined = args.join(" ");
+    let joined = shell_command_line(args);
     #[cfg(unix)]
     {
         let mut c = tokio::process::Command::new("sh");
@@ -38,6 +38,46 @@ fn shell_command(args: &[String]) -> tokio::process::Command {
         c.arg("/C").arg(joined);
         c
     }
+}
+
+fn shell_command_line(args: &[String]) -> String {
+    if args.len() == 1 {
+        return args[0].clone();
+    }
+
+    args.iter()
+        .map(|arg| shell_quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(unix)]
+fn shell_quote(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+    if arg.bytes().all(|b| {
+        b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/' | b':' | b'=' | b',')
+    }) {
+        return arg.to_string();
+    }
+    format!("'{}'", arg.replace('\'', "'\\''"))
+}
+
+#[cfg(windows)]
+fn shell_quote(arg: &str) -> String {
+    if arg.is_empty() {
+        return "\"\"".to_string();
+    }
+    if !arg.bytes().any(|b| {
+        matches!(
+            b,
+            b' ' | b'\t' | b'&' | b'|' | b'<' | b'>' | b'(' | b')' | b'^' | b'"' | b'%'
+        )
+    }) {
+        return arg.to_string();
+    }
+    format!("\"{}\"", arg.replace('"', "\\\""))
 }
 
 /// Spawn a command directly without proxy registration.
@@ -55,7 +95,7 @@ async fn run_direct(config: &Config, cmd: &[String]) -> anyhow::Result<()> {
         .await?;
 
     if !status.success() {
-        propagate_exit_status(status);
+        exit_with_status(status);
     }
 
     Ok(())
@@ -168,7 +208,11 @@ pub async fn run_app(
     let path_filter = if path == "/" { None } else { Some(path) };
     let _ = store.remove_route(&hostname, path_filter);
 
-    result
+    match result {
+        Ok(0) => Ok(()),
+        Ok(code) => std::process::exit(code),
+        Err(e) => Err(e),
+    }
 }
 
 /// Spawn a child process with signal forwarding. On Unix the child is
@@ -183,10 +227,10 @@ async fn spawn_command(
     original_cmd: &[String],
     hostname: &str,
     path: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<i32> {
     use process_wrap::tokio::*;
 
-    let shell_cmd = args.join(" ");
+    let shell_cmd = shell_command_line(args);
 
     let mut wrap = CommandWrap::with_new("sh", |command| {
         command
@@ -194,7 +238,8 @@ async fn spawn_command(
             .arg(&shell_cmd)
             .env("PORT", port.to_string())
             .env("HOST", "127.0.0.1")
-            .env("NSL_URL", url);
+            .env("NSL_URL", url)
+            .env("NSL", "1");
     });
 
     wrap.wrap(ProcessGroup::leader());
@@ -226,21 +271,19 @@ async fn spawn_command(
     tokio::select! {
         status = wait_fut => {
             let status = status?;
-            propagate_exit_status(status);
+            Ok(exit_code_from_status(status).unwrap_or(0))
         }
         _ = sigint.recv() => {
             let _ = nix::sys::signal::killpg(pgid, nix::sys::signal::Signal::SIGTERM);
             let status = child.wait().await?;
-            propagate_exit_status(status);
+            Ok(exit_code_from_status(status).unwrap_or(0))
         }
         _ = sigterm.recv() => {
             let _ = nix::sys::signal::killpg(pgid, nix::sys::signal::Signal::SIGTERM);
             let status = child.wait().await?;
-            propagate_exit_status(status);
+            Ok(exit_code_from_status(status).unwrap_or(0))
         }
     }
-
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -252,13 +295,14 @@ async fn spawn_command(
     original_cmd: &[String],
     hostname: &str,
     path: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<i32> {
     use framework::wait_for_app;
 
     let mut cmd = shell_command(args);
     cmd.env("PORT", port.to_string())
         .env("HOST", "127.0.0.1")
-        .env("NSL_URL", url);
+        .env("NSL_URL", url)
+        .env("NSL", "1");
 
     let mut child = cmd.spawn()?;
     let child_pid = child.id().unwrap_or(0);
@@ -274,33 +318,38 @@ async fn spawn_command(
     tokio::select! {
         status = child.wait() => {
             let status = status?;
-            propagate_exit_status(status);
+            return Ok(exit_code_from_status(status).unwrap_or(0));
         }
         _ = tokio::signal::ctrl_c() => {
             let _ = child.start_kill();
             let status = child.wait().await?;
-            propagate_exit_status(status);
+            return Ok(exit_code_from_status(status).unwrap_or(0));
         }
     }
-
-    Ok(())
 }
 
-/// Propagate child exit status to the current process.
-fn propagate_exit_status(status: std::process::ExitStatus) {
+fn exit_code_from_status(status: std::process::ExitStatus) -> Option<i32> {
     if let Some(code) = status.code() {
         if code != 0 {
-            std::process::exit(code);
+            return Some(code);
         }
+        None
     } else {
         #[cfg(unix)]
         {
             use std::os::unix::process::ExitStatusExt;
             if let Some(sig) = status.signal() {
-                std::process::exit(128 + sig);
+                return Some(128 + sig);
             }
         }
-        std::process::exit(1);
+        Some(1)
+    }
+}
+
+/// Propagate child exit status to the current process.
+fn exit_with_status(status: std::process::ExitStatus) {
+    if let Some(code) = exit_code_from_status(status) {
+        std::process::exit(code);
     }
 }
 

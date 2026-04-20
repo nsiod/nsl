@@ -51,13 +51,12 @@ pub(super) async fn handle(cli: Cli) -> anyhow::Result<()> {
             .await
         }
         Commands::Start {
-            port,
-            bind,
+            listen,
             https,
             foreground,
             daemonize,
         } => {
-            apply_cli_overrides(&mut config, port, https, bind);
+            apply_cli_overrides(&mut config, listen, https)?;
 
             if daemonize {
                 crate::proxy::daemonize_and_start_proxy(&config)
@@ -70,12 +69,11 @@ pub(super) async fn handle(cli: Cli) -> anyhow::Result<()> {
             crate::proxy::stop_proxy(&state_dir)
         }
         Commands::Reload {
-            port,
-            bind,
+            listen,
             https,
             foreground,
         } => {
-            apply_cli_overrides(&mut config, port, https, bind);
+            apply_cli_overrides(&mut config, listen, https)?;
             let state_dir = config.resolve_state_dir();
             // Best-effort stop; ignore if not running.
             let _ = crate::proxy::stop_proxy(&state_dir);

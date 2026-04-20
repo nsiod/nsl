@@ -60,7 +60,13 @@ fn write_tls_marker(state_dir: &Path, tls: bool) -> anyhow::Result<()> {
 /// Load routes from disk via the RouteStore, returning an empty vec on error.
 fn load_routes_from_disk(state_dir: &Path) -> Vec<RouteMapping> {
     let store = RouteStore::new(state_dir.to_path_buf());
-    store.load_routes().unwrap_or_default()
+    match store.load_routes() {
+        Ok(routes) => routes,
+        Err(e) => {
+            tracing::warn!("failed to load routes from {}: {}", state_dir.display(), e);
+            Vec::new()
+        }
+    }
 }
 
 /// Get the mtime of a file, returning `None` if the file doesn't exist or

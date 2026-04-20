@@ -99,7 +99,7 @@ pub fn daemonize_and_start_proxy(config: &Config) -> anyhow::Result<()> {
     let log_writer = fs::File::options()
         .append(true)
         .open(state_dir.join("proxy.log"))
-        .unwrap_or_else(|_| fs::File::create(state_dir.join("proxy.log")).unwrap());
+        .or_else(|_| fs::File::create(state_dir.join("proxy.log")))?;
     let _ = tracing_subscriber::fmt()
         .with_writer(std::sync::Mutex::new(log_writer))
         .with_ansi(false)
@@ -122,10 +122,8 @@ fn spawn_proxy_daemon_process(config: &Config) -> anyhow::Result<()> {
     let mut args = vec![
         "start".to_string(),
         "--daemonize".to_string(),
-        "--port".to_string(),
-        config.proxy_port.to_string(),
-        "--bind".to_string(),
-        config.proxy_bind.to_string(),
+        "--listen".to_string(),
+        config.proxy_listen(),
     ];
     if config.proxy_https {
         args.push("--https".to_string());

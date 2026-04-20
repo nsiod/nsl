@@ -147,9 +147,13 @@ pub fn get_route_statuses(
 ) -> Vec<RouteStatus> {
     // Load raw routes without filtering dead processes (we want to show them)
     let routes = match fs::read_to_string(state_dir.join("routes.json")) {
-        Ok(raw) => {
-            serde_json::from_str::<Vec<crate::routes::RouteMapping>>(&raw).unwrap_or_default()
-        }
+        Ok(raw) => match serde_json::from_str::<Vec<crate::routes::RouteMapping>>(&raw) {
+            Ok(routes) => routes,
+            Err(e) => {
+                eprintln!("warning: failed to parse routes.json: {e}");
+                Vec::new()
+            }
+        },
         Err(_) => return Vec::new(),
     };
 

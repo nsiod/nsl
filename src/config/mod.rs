@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,8 @@ pub struct RawConfig {
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct RawProxy {
+    pub listen: Option<String>,
+    // Deprecated: use `listen` instead. Kept for older config files.
     pub port: Option<u16>,
     pub https: Option<bool>,
     pub max_hops: Option<u8>,
@@ -28,12 +30,12 @@ pub struct RawProxy {
     /// (scheme/port differ from the local proxy). Example TOML:
     ///
     /// ```toml
-    /// [proxy.domain."myapp.com"]
+    /// [proxy.display."myapp.com"]
     /// scheme = "https"
     /// port = 8080
     /// ```
-    pub domain: Option<BTreeMap<String, RawDomainDisplay>>,
-    /// IP address to bind on (e.g. "127.0.0.1" or "0.0.0.0").
+    pub display: Option<BTreeMap<String, RawDomainDisplay>>,
+    /// Deprecated: use `listen` instead. Kept for older config files.
     pub bind: Option<String>,
 }
 
@@ -137,11 +139,12 @@ impl RawConfig {
     pub fn merge(self, other: RawConfig) -> RawConfig {
         RawConfig {
             proxy: merge_opt(self.proxy, other.proxy, |a, b| RawProxy {
+                listen: b.listen.or(a.listen),
                 port: b.port.or(a.port),
                 https: b.https.or(a.https),
                 max_hops: b.max_hops.or(a.max_hops),
                 domains: b.domains.or(a.domains),
-                domain: b.domain.or(a.domain),
+                display: b.display.or(a.display),
                 bind: b.bind.or(a.bind),
             }),
             app: merge_opt(self.app, other.app, |a, b| RawApp {
@@ -159,10 +162,11 @@ impl RawConfig {
 
     /// Apply env var overrides on top of this config.
     pub fn with_env_overrides(mut self) -> Self {
-        if let Ok(val) = std::env::var("NSL_PORT")
-            && let Ok(port) = val.parse()
-        {
-            self.proxy.get_or_insert_with(Default::default).port = Some(port);
+        if let Ok(val) = std::env::var("NSL_LISTEN") {
+            let listen = val.trim().to_string();
+            if !listen.is_empty() {
+                self.proxy.get_or_insert_with(Default::default).listen = Some(listen);
+            }
         }
         if let Ok(val) = std::env::var("NSL_HTTPS") {
             let https = matches!(val.as_str(), "1" | "true" | "yes");
@@ -178,12 +182,6 @@ impl RawConfig {
                 self.proxy.get_or_insert_with(Default::default).domains = Some(domains);
             }
         }
-        if let Ok(val) = std::env::var("NSL_BIND") {
-            let trimmed = val.trim().to_string();
-            if !trimmed.is_empty() {
-                self.proxy.get_or_insert_with(Default::default).bind = Some(trimmed);
-            }
-        }
         if let Ok(val) = std::env::var("NSL_STATE_DIR") {
             self.paths.get_or_insert_with(Default::default).state_dir = Some(val);
         }
@@ -193,13 +191,10 @@ impl RawConfig {
     /// Resolve into a Config with defaults applied.
     pub fn resolve(self) -> Config {
         let defaults = Config::default();
+        let (proxy_bind, proxy_port) = resolve_proxy_listen(self.proxy.as_ref(), &defaults);
 
         Config {
-            proxy_port: self
-                .proxy
-                .as_ref()
-                .and_then(|p| p.port)
-                .unwrap_or(defaults.proxy_port),
+            proxy_port,
             proxy_https: self
                 .proxy
                 .as_ref()
@@ -219,21 +214,10 @@ impl RawConfig {
             domain_displays: self
                 .proxy
                 .as_ref()
-                .and_then(|p| p.domain.clone())
+                .and_then(|p| p.display.clone())
                 .map(resolve_domain_displays)
                 .unwrap_or_default(),
-            proxy_bind: self
-                .proxy
-                .as_ref()
-                .and_then(|p| p.bind.as_deref())
-                .and_then(|s| match s.parse::<IpAddr>() {
-                    Ok(ip) => Some(ip),
-                    Err(e) => {
-                        tracing::warn!("invalid proxy.bind '{}': {} — using default", s, e);
-                        None
-                    }
-                })
-                .unwrap_or(defaults.proxy_bind),
+            proxy_bind,
             app_port: self.app.as_ref().and_then(|a| a.port),
             app_port_range: (
                 self.app
@@ -262,6 +246,58 @@ impl RawConfig {
                 .map(PathBuf::from),
         }
     }
+}
+
+fn resolve_proxy_listen(proxy: Option<&RawProxy>, defaults: &Config) -> (IpAddr, u16) {
+    if let Some(raw) = proxy.and_then(|p| p.listen.as_deref()) {
+        match parse_listen(raw) {
+            Ok(listen) => return listen,
+            Err(e) => {
+                let msg = format!("invalid proxy.listen '{}': {} -- using default", raw, e);
+                tracing::warn!("{msg}");
+                eprintln!("warning: {msg}");
+                return (defaults.proxy_bind, defaults.proxy_port);
+            }
+        }
+    }
+
+    let bind = proxy
+        .and_then(|p| p.bind.as_deref())
+        .and_then(|s| match s.parse::<IpAddr>() {
+            Ok(ip) => Some(ip),
+            Err(e) => {
+                let msg = format!(
+                    "invalid deprecated proxy.bind '{}': {} -- using default",
+                    s, e
+                );
+                tracing::warn!("{msg}");
+                eprintln!("warning: {msg}");
+                None
+            }
+        })
+        .unwrap_or(defaults.proxy_bind);
+    let port = proxy.and_then(|p| p.port).unwrap_or(defaults.proxy_port);
+
+    (bind, port)
+}
+
+pub fn parse_listen(raw: &str) -> Result<(IpAddr, u16), String> {
+    let listen = raw.trim();
+    if listen.is_empty() {
+        return Err("empty listen address".to_string());
+    }
+
+    if let Some(port) = listen.strip_prefix(':') {
+        let port = port
+            .parse::<u16>()
+            .map_err(|e| format!("invalid port: {e}"))?;
+        return Ok((IpAddr::V4(Ipv4Addr::UNSPECIFIED), port));
+    }
+
+    let addr = listen
+        .parse::<SocketAddr>()
+        .map_err(|e| format!("expected HOST:PORT or :PORT: {e}"))?;
+    Ok((addr.ip(), addr.port()))
 }
 
 /// Ensure `localhost` is present in the domains list, preserving user order
@@ -332,7 +368,9 @@ fn load_config_file(path: &Path) -> Option<RawConfig> {
     match toml::from_str(&content) {
         Ok(config) => Some(config),
         Err(e) => {
-            tracing::warn!("failed to parse config {}: {}", path.display(), e);
+            let msg = format!("failed to parse config {}: {}", path.display(), e);
+            tracing::warn!("{msg}");
+            eprintln!("warning: {msg}");
             None
         }
     }
@@ -352,6 +390,10 @@ pub fn load_config() -> Config {
 }
 
 impl Config {
+    pub fn proxy_listen(&self) -> String {
+        SocketAddr::new(self.proxy_bind, self.proxy_port).to_string()
+    }
+
     pub fn resolve_state_dir(&self) -> PathBuf {
         if let Some(ref dir) = self.state_dir {
             return dir.clone();
@@ -374,13 +416,12 @@ fn dirs_or_home() -> PathBuf {
 pub fn print_config() {
     let config = load_config();
     println!("Config");
-    println!("  proxy.port:       {}", config.proxy_port);
-    println!("  proxy.bind:       {}", config.proxy_bind);
+    println!("  proxy.listen:     {}", config.proxy_listen());
     println!("  proxy.https:      {}", config.proxy_https);
     println!("  proxy.max_hops:   {}", config.max_hops);
     println!("  proxy.domains:    {}", config.domains.join(", "));
     if !config.domain_displays.is_empty() {
-        println!("  proxy.domain:");
+        println!("  proxy.display:");
         for d in &config.domain_displays {
             let port = match d.port {
                 Some(p) => format!(":{}", p),

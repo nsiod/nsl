@@ -90,7 +90,7 @@ impl RouteStore {
         }
 
         let raw = fs::read_to_string(&self.routes_path)?;
-        let routes: Vec<RouteMapping> = serde_json::from_str(&raw).unwrap_or_default();
+        let routes: Vec<RouteMapping> = serde_json::from_str(&raw)?;
 
         let alive: Vec<RouteMapping> = routes
             .into_iter()

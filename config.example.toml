@@ -6,15 +6,13 @@
 # Everything shown here is optional; delete anything you don't need.
 
 [proxy]
-# Port the proxy listens on. Default: 1355.
-port = 1355
+# Address the proxy listens on. Default: 127.0.0.1:1355.
+# Use ":1355" to listen on all IPv4 interfaces.
+listen = "127.0.0.1:1355"
 
 # Terminate TLS at the proxy (HTTP/2 supported). Per-host certs are
 # generated on demand via SNI after `sudo nsl trust`. Default: false.
 https = false
-
-# IP to bind. Use "0.0.0.0" to accept LAN traffic. Default: 127.0.0.1.
-bind = "127.0.0.1"
 
 # Drop requests whose x-nsl-hops exceeds this (loop detection). Default: 5.
 max_hops = 5
@@ -28,7 +26,7 @@ domains = ["localhost", "dev.local"]
 # external domains are fronted by another reverse proxy and the public
 # URL differs from the local proxy scheme/port.
 #
-# [proxy.domain."dev.example.com"]
+# [proxy.display."dev.example.com"]
 # https = true     # default: true
 # port = 443       # omit for scheme default (80/443)
 

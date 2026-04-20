@@ -5,7 +5,7 @@ mod websocket;
 
 use std::sync::Arc;
 
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Bytes;
 use hyper::{Response, StatusCode};
 use tokio::sync::RwLock;
@@ -24,27 +24,35 @@ pub(crate) const NSL_HOPS_HEADER: &str = "x-nsl-hops";
 /// Shared in-memory route cache, updated by the background polling task.
 pub(crate) type RouteCache = Arc<RwLock<Vec<RouteMapping>>>;
 
+pub(super) type ProxyBody = BoxBody<Bytes, hyper::Error>;
+
 // ---------------------------------------------------------------------------
 // Shared response helpers (used by handler and websocket)
 // ---------------------------------------------------------------------------
 
-pub(super) fn response(status: StatusCode, body: &str) -> Response<Full<Bytes>> {
+fn boxed_full(body: impl Into<Bytes>) -> ProxyBody {
+    Full::new(body.into())
+        .map_err(|never| match never {})
+        .boxed()
+}
+
+pub(super) fn response(status: StatusCode, body: &str) -> Response<ProxyBody> {
     // Static header names + owned body means the builder cannot fail.
     Response::builder()
         .status(status)
         .header("Content-Type", "text/plain")
         .header(NSL_HEADER, "1")
-        .body(Full::new(Bytes::from(body.to_string())))
+        .body(boxed_full(body.to_string()))
         .expect("response builder inputs are static")
 }
 
-pub(super) fn html_response(status: StatusCode, html: &str) -> Response<Full<Bytes>> {
+pub(super) fn html_response(status: StatusCode, html: &str) -> Response<ProxyBody> {
     // Static header names + owned body means the builder cannot fail.
     Response::builder()
         .status(status)
         .header("Content-Type", "text/html; charset=utf-8")
         .header(NSL_HEADER, "1")
-        .body(Full::new(Bytes::from(html.to_string())))
+        .body(boxed_full(html.to_string()))
         .expect("html_response builder inputs are static")
 }
 

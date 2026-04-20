@@ -32,14 +32,13 @@ fn main() -> anyhow::Result<()> {
     // daemonized child.
     if let cli::Commands::Start {
         daemonize: true,
-        port,
-        bind,
+        listen,
         https,
         ..
     } = &cli.command
     {
         let mut config = config::load_config();
-        cli::apply_cli_overrides(&mut config, *port, *https, *bind);
+        cli::apply_cli_overrides(&mut config, listen.clone(), *https)?;
         return proxy::daemonize_and_start_proxy(&config);
     }
 

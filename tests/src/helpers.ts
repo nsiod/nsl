@@ -29,7 +29,7 @@ export function nslEnv(stateDir: string, proxyPort: number) {
   return {
     ...process.env,
     NSL_STATE_DIR: stateDir,
-    NSL_PORT: String(proxyPort),
+    NSL_LISTEN: `127.0.0.1:${proxyPort}`,
   };
 }
 
@@ -59,7 +59,7 @@ export async function nsl(
 let proxyProc: Subprocess | null = null;
 
 export async function startProxy(stateDir: string, port: number) {
-  proxyProc = spawn([NSL_BIN, "proxy", "start", "--foreground"], {
+  proxyProc = spawn([NSL_BIN, "start", "--foreground"], {
     env: nslEnv(stateDir, port),
     stdout: "pipe",
     stderr: "pipe",

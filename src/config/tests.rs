@@ -25,7 +25,7 @@ fn test_raw_config_resolve_defaults() {
 fn test_raw_config_resolve_overrides() {
     let raw = RawConfig {
         proxy: Some(RawProxy {
-            port: Some(8080),
+            listen: Some("127.0.0.1:8080".to_string()),
             https: Some(true),
             ..Default::default()
         }),
@@ -41,7 +41,7 @@ fn test_raw_config_resolve_overrides() {
 fn test_merge_both_present() {
     let base = RawConfig {
         proxy: Some(RawProxy {
-            port: Some(1355),
+            listen: Some("127.0.0.1:1355".to_string()),
             https: Some(false),
             max_hops: Some(3),
             ..Default::default()
@@ -50,7 +50,7 @@ fn test_merge_both_present() {
     };
     let overlay = RawConfig {
         proxy: Some(RawProxy {
-            port: Some(8080),
+            listen: Some("127.0.0.1:8080".to_string()),
             ..Default::default()
         }),
         app: Some(RawApp {
@@ -70,7 +70,7 @@ fn test_merge_both_present() {
 fn test_merge_only_base() {
     let base = RawConfig {
         proxy: Some(RawProxy {
-            port: Some(9090),
+            listen: Some("127.0.0.1:9090".to_string()),
             ..Default::default()
         }),
         ..Default::default()
@@ -107,7 +107,7 @@ fn test_load_config_file_valid() {
         &config_path,
         r#"
 [proxy]
-port = 4000
+listen = "127.0.0.1:4000"
 https = true
 
 [app]
@@ -138,7 +138,11 @@ fn test_find_project_config() {
     let tmp = tempfile::TempDir::new().unwrap();
     let sub = tmp.path().join("a").join("b");
     fs::create_dir_all(&sub).unwrap();
-    fs::write(tmp.path().join("nsl.toml"), "[proxy]\nport = 7777\n").unwrap();
+    fs::write(
+        tmp.path().join("nsl.toml"),
+        "[proxy]\nlisten = \"127.0.0.1:7777\"\n",
+    )
+    .unwrap();
 
     let found = find_project_config(&sub);
     assert_eq!(found.unwrap(), tmp.path().join("nsl.toml"));
@@ -211,8 +215,8 @@ fn test_localhost_not_duplicated_if_user_included_it() {
 
 #[test]
 fn test_domain_display_resolves_defaults() {
-    let mut domain = BTreeMap::new();
-    domain.insert(
+    let mut display = BTreeMap::new();
+    display.insert(
         "myapp.com".to_string(),
         RawDomainDisplay {
             https: None,
@@ -222,7 +226,7 @@ fn test_domain_display_resolves_defaults() {
     let raw = RawConfig {
         proxy: Some(RawProxy {
             domains: Some(vec!["myapp.com".to_string()]),
-            domain: Some(domain),
+            display: Some(display),
             ..Default::default()
         }),
         ..Default::default()
@@ -244,10 +248,10 @@ fn test_domain_display_from_toml() {
 [proxy]
 domains = ["myapp.com"]
 
-[proxy.domain."myapp.com"]
+[proxy.display."myapp.com"]
 https = true
 
-[proxy.domain."dev.internal"]
+[proxy.display."dev.internal"]
 https = false
 port = 8080
 "#,
@@ -305,7 +309,7 @@ fn test_load_config_file_with_domains() {
         &config_path,
         r#"
 [proxy]
-port = 1355
+listen = "127.0.0.1:1355"
 domains = ["dev.local", "localhost", "test"]
 "#,
     )
@@ -324,15 +328,74 @@ domains = ["dev.local", "localhost", "test"]
 }
 
 #[test]
-fn test_default_bind_is_loopback() {
+fn test_default_listen_is_loopback() {
     let config = Config::default();
     assert_eq!(config.proxy_bind, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    assert_eq!(config.proxy_port, 1355);
+    assert_eq!(config.proxy_listen(), "127.0.0.1:1355");
 }
 
 #[test]
-fn test_bind_config_any_address() {
+fn test_listen_config_any_address() {
     let raw = RawConfig {
         proxy: Some(RawProxy {
+            listen: Some(":8080".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let config = raw.resolve();
+    assert_eq!(config.proxy_bind, IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+    assert_eq!(config.proxy_port, 8080);
+}
+
+#[test]
+fn test_parse_listen_colon_port() {
+    let (bind, port) = parse_listen(":1355").unwrap();
+    assert_eq!(bind, IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
+    assert_eq!(port, 1355);
+}
+
+#[test]
+fn test_parse_listen_host_port() {
+    let (bind, port) = parse_listen("127.0.0.1:1355").unwrap();
+    assert_eq!(bind, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    assert_eq!(port, 1355);
+}
+
+#[test]
+fn test_listen_config_with_host() {
+    let raw = RawConfig {
+        proxy: Some(RawProxy {
+            listen: Some("127.0.0.1:8080".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let config = raw.resolve();
+    assert_eq!(config.proxy_bind, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    assert_eq!(config.proxy_port, 8080);
+}
+
+#[test]
+fn test_listen_invalid_falls_back_to_default() {
+    let raw = RawConfig {
+        proxy: Some(RawProxy {
+            listen: Some("not-a-listen-address".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let config = raw.resolve();
+    assert_eq!(config.proxy_bind, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    assert_eq!(config.proxy_port, 1355);
+}
+
+#[test]
+fn test_deprecated_port_and_bind_still_resolve() {
+    let raw = RawConfig {
+        proxy: Some(RawProxy {
+            port: Some(8080),
             bind: Some("0.0.0.0".to_string()),
             ..Default::default()
         }),
@@ -340,19 +403,7 @@ fn test_bind_config_any_address() {
     };
     let config = raw.resolve();
     assert_eq!(config.proxy_bind, IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
-}
-
-#[test]
-fn test_bind_invalid_falls_back_to_default() {
-    let raw = RawConfig {
-        proxy: Some(RawProxy {
-            bind: Some("not-an-ip".to_string()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let config = raw.resolve();
-    assert_eq!(config.proxy_bind, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    assert_eq!(config.proxy_port, 8080);
 }
 
 #[test]

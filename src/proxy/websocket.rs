@@ -1,4 +1,4 @@
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -7,7 +7,7 @@ use tokio::net::TcpStream;
 
 use crate::routes::RouteMapping;
 
-use super::{NSL_HEADER, NSL_HOPS_HEADER, response, strip_path_prefix};
+use super::{NSL_HEADER, NSL_HOPS_HEADER, ProxyBody, response, strip_path_prefix};
 
 // ---------------------------------------------------------------------------
 // Upgrade detection
@@ -128,7 +128,7 @@ pub(super) async fn handle_upgrade(
     hops: u32,
     route: &RouteMapping,
     is_tls: bool,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> Result<Response<ProxyBody>, hyper::Error> {
     let target_port = route.port;
 
     let req_path = req.uri().path().to_string();
@@ -248,7 +248,11 @@ pub(super) async fn handle_upgrade(
             }
         }
 
-        return match builder.body(Full::new(Bytes::from(body_data))) {
+        return match builder.body(
+            Full::new(Bytes::from(body_data))
+                .map_err(|never| match never {})
+                .boxed(),
+        ) {
             Ok(resp) => Ok(resp),
             Err(e) => {
                 tracing::warn!("failed to build forwarded response: {e}");
@@ -279,7 +283,11 @@ pub(super) async fn handle_upgrade(
             }
         }
 
-        match builder.body(Full::new(Bytes::new())) {
+        match builder.body(
+            Full::new(Bytes::new())
+                .map_err(|never| match never {})
+                .boxed(),
+        ) {
             Ok(resp) => resp,
             Err(e) => {
                 tracing::warn!("failed to build upgrade response: {e}");

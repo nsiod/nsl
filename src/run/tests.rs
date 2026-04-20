@@ -27,9 +27,23 @@ fn with_nsl_env<F: FnOnce()>(value: Option<&str>, f: F) {
 }
 
 #[test]
-fn test_propagate_exit_status_success() {
+fn test_exit_code_from_status_success() {
     let status = std::process::Command::new("true").status().unwrap();
-    propagate_exit_status(status);
+    assert_eq!(exit_code_from_status(status), None);
+}
+
+#[test]
+fn test_shell_command_line_preserves_argument_boundaries() {
+    let cmd = shell_command_line(&[
+        "node".to_string(),
+        "-e".to_string(),
+        "console.log(process.env.PORT)".to_string(),
+    ]);
+
+    assert!(cmd.contains("node"));
+    assert!(cmd.contains("-e"));
+    assert!(cmd.contains("console.log(process.env.PORT)"));
+    assert_ne!(cmd, "node -e console.log(process.env.PORT)");
 }
 
 #[test]
@@ -108,7 +122,7 @@ async fn test_run_direct_uses_configured_port() {
         app_port: Some(4567),
         ..Config::default()
     };
-    let cmd = vec!["echo".to_string(), "$PORT".to_string()];
+    let cmd = vec!["test \"$PORT\" = 4567".to_string()];
     let result = run_direct(&config, &cmd).await;
     assert!(result.is_ok());
 }
@@ -116,12 +130,7 @@ async fn test_run_direct_uses_configured_port() {
 #[tokio::test]
 async fn test_run_direct_default_port_zero() {
     let config = Config::default();
-    let cmd = vec![
-        "test".to_string(),
-        "$PORT".to_string(),
-        "=".to_string(),
-        "0".to_string(),
-    ];
+    let cmd = vec!["test \"$PORT\" = 0".to_string()];
     let result = run_direct(&config, &cmd).await;
     assert!(result.is_ok());
 }
