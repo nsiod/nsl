@@ -1,6 +1,6 @@
 {
   "name": "@nsio/nsl",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Replace port numbers with stable, named .localhost URLs. For humans and agents.",
   "keywords": [
     "local",
@@ -30,10 +30,10 @@
     "node": ">=16"
   },
   "optionalDependencies": {
-    "@nsio/nsl-linux-x64": "0.1.0",
-    "@nsio/nsl-linux-arm64": "0.1.0",
-    "@nsio/nsl-darwin-x64": "0.1.0",
-    "@nsio/nsl-darwin-arm64": "0.1.0",
-    "@nsio/nsl-win32-x64": "0.1.0"
+    "@nsio/nsl-linux-x64": "0.1.1",
+    "@nsio/nsl-linux-arm64": "0.1.1",
+    "@nsio/nsl-darwin-x64": "0.1.1",
+    "@nsio/nsl-darwin-arm64": "0.1.1",
+    "@nsio/nsl-win32-x64": "0.1.1"
   }
 }
