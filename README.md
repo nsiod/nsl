@@ -47,10 +47,8 @@ No config, no flags. `nsl`:
 - Infers the app name from `package.json`, the Git root, or the cwd.
 - Starts the proxy daemon if it isn't already up.
 - Reserves a port from `[app].port_range_start..port_range_end`.
-- Registers the route and injects `PORT`, `HOST`, `NSL_URL` into your command's environment.
+- Registers the route and injects the allocated port into your command.
 - Tails output until you Ctrl-C, then removes the route.
-
-Most frameworks (Next.js, Express, Nuxt, Remix, Hono) already honor `PORT`. For frameworks that don't, pass the injected port yourself: `nsl run bun run dev --port $PORT`.
 
 Set `NSL=0` or `NSL=skip` to opt out of registration for a single invocation.
 
@@ -65,6 +63,38 @@ Set `NSL=0` or `NSL=skip` to opt out of registration for a single invocation.
 ```
 
 Commit that once and every contributor gets the same URL for the service.
+
+## Port injection
+
+`nsl run` always exports these environment variables to the child process:
+
+| Variable  | Value |
+| --------- | ----- |
+| `PORT`    | Allocated app port |
+| `HOST`    | `127.0.0.1` |
+| `NSL_URL` | Stable proxy URL |
+
+Most frameworks (Next.js, Express, Nuxt, Remix, Hono) already honor `PORT`.
+
+For CLIs that expect explicit port flags, `nsl` can add framework-specific arguments when it recognizes the command:
+
+| Command contains | Added arguments |
+| ---------------- | --------------- |
+| `vite`, `react-router` | `--port <port> --strictPort --host 127.0.0.1` |
+| `astro`, ` ng `, `react-native` | `--port <port> --host 127.0.0.1` |
+| `expo` | `--port <port> --host localhost` |
+
+If the command already contains `--port` or `--host`, `nsl` leaves that option alone.
+
+For unknown CLIs that do not read `PORT`, pass the allocated app port with the `NSL_PORT` argument placeholder:
+
+```bash
+nsl run ./server --port NSL_PORT
+nsl run ./server --addr 127.0.0.1:NSL_PORT
+nsl run ./server --listen=127.0.0.1:NSL_PORT
+```
+
+`nsl` replaces `NSL_PORT` only in the child command arguments, after it allocates the app port. The `NSL_PORT` environment variable still configures the proxy port.
 
 ## How it works
 

@@ -17,6 +17,9 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub(super) enum Commands {
     /// Infer name from project and run through proxy
+    #[command(
+        after_help = "Port placeholder:\n  Use NSL_PORT in child command arguments when a CLI does not read PORT.\n  Example: nsl run ./server --port NSL_PORT\n  The NSL_PORT environment variable still configures the proxy port."
+    )]
     Run {
         /// Command and arguments to run
         #[arg(trailing_var_arg = true, required = true)]
@@ -176,5 +179,24 @@ pub(super) fn apply_cli_overrides(
 impl Cli {
     pub async fn run(self) -> anyhow::Result<()> {
         handler::handle(self).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn test_run_help_shows_port_placeholder() {
+        let mut command = Cli::command();
+        let run = command.find_subcommand_mut("run").unwrap();
+        let mut help = Vec::new();
+
+        run.write_help(&mut help).unwrap();
+        let help = String::from_utf8(help).unwrap();
+
+        assert!(help.contains("NSL_PORT"));
+        assert!(help.contains("child command arguments"));
     }
 }

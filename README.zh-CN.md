@@ -47,10 +47,8 @@ nsl run npm run dev
 - 从 `package.json`、Git 根目录或当前目录推断应用名。
 - 如果代理守护进程没在跑,自动启动。
 - 从 `[app].port_range_start..port_range_end` 挑一个空闲端口。
-- 注册路由并把 `PORT`、`HOST`、`NSL_URL` 注入子进程环境。
+- 注册路由并把分配到的端口注入子进程。
 - 跟随输出直到 Ctrl-C,然后清理路由。
-
-大部分框架(Next.js、Express、Nuxt、Remix、Hono)自动识别 `PORT`。不识别的框架,手动把注入的端口传进去:`nsl run bun run dev --port $PORT`。
 
 想让某次调用跳过注册,设 `NSL=0` 或 `NSL=skip`。
 
@@ -65,6 +63,38 @@ nsl run npm run dev
 ```
 
 提交一次,所有协作者都用同一个 URL。
+
+## 端口注入
+
+`nsl run` 总会给子进程注入这些环境变量:
+
+| 变量      | 值 |
+| --------- | --- |
+| `PORT`    | 自动分配的应用端口 |
+| `HOST`    | `127.0.0.1` |
+| `NSL_URL` | 稳定代理 URL |
+
+大部分框架(Next.js、Express、Nuxt、Remix、Hono)自动识别 `PORT`。
+
+对需要显式端口参数的 CLI,`nsl` 识别到部分框架命令后会自动追加参数:
+
+| 命令包含 | 追加参数 |
+| -------- | -------- |
+| `vite`、`react-router` | `--port <port> --strictPort --host 127.0.0.1` |
+| `astro`、` ng `、`react-native` | `--port <port> --host 127.0.0.1` |
+| `expo` | `--port <port> --host localhost` |
+
+如果命令里已经有 `--port` 或 `--host`,`nsl` 不会覆盖该参数。
+
+对不读取 `PORT` 的未知 CLI,用 `NSL_PORT` 参数占位符传入自动分配的应用端口:
+
+```bash
+nsl run ./server --port NSL_PORT
+nsl run ./server --addr 127.0.0.1:NSL_PORT
+nsl run ./server --listen=127.0.0.1:NSL_PORT
+```
+
+`nsl` 会在分配应用端口后,只替换子命令参数里的 `NSL_PORT` 字面量。`NSL_PORT` 环境变量仍然表示代理端口。
 
 ## 工作原理
 

@@ -62,6 +62,14 @@ pub fn inject_framework_flags(args: &[String], port: u16) -> Vec<String> {
     result
 }
 
+/// Replace the literal app-port placeholder in command arguments.
+pub fn replace_port_placeholders(args: &[String], port: u16) -> Vec<String> {
+    let port = port.to_string();
+    args.iter()
+        .map(|arg| arg.replace("NSL_PORT", &port))
+        .collect()
+}
+
 struct FrameworkHint {
     strict_port: bool,
     host: &'static str,
@@ -240,6 +248,31 @@ mod tests {
         let args = vec!["npx".to_string(), "expo".to_string(), "start".to_string()];
         let result = inject_framework_flags(&args, 4000);
         assert!(result.contains(&"localhost".to_string()));
+    }
+
+    #[test]
+    fn test_replace_port_placeholders_whole_arg() {
+        let args = vec![
+            "./server".to_string(),
+            "-port".to_string(),
+            "NSL_PORT".to_string(),
+        ];
+
+        let result = replace_port_placeholders(&args, 4000);
+
+        assert_eq!(result, vec!["./server", "-port", "4000"]);
+    }
+
+    #[test]
+    fn test_replace_port_placeholders_inside_arg() {
+        let args = vec![
+            "./server".to_string(),
+            "--addr=127.0.0.1:NSL_PORT".to_string(),
+        ];
+
+        let result = replace_port_placeholders(&args, 4000);
+
+        assert_eq!(result, vec!["./server", "--addr=127.0.0.1:4000"]);
     }
 
     #[tokio::test]

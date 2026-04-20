@@ -7,7 +7,7 @@ use crate::utils::{extract_hostname_prefix, format_url, format_urls, parse_hostn
 
 #[cfg(unix)]
 use framework::wait_for_app_wrapped;
-use framework::{find_free_port, inject_framework_flags};
+use framework::{find_free_port, inject_framework_flags, replace_port_placeholders};
 
 /// Check if nsl proxy is disabled via the NSL environment variable.
 ///
@@ -157,7 +157,7 @@ pub async fn run_app(
     tracing::info!("{} -> localhost:{}", url, app_port);
 
     // Inject framework flags
-    let final_args = inject_framework_flags(cmd, app_port);
+    let final_args = replace_port_placeholders(&inject_framework_flags(cmd, app_port), app_port);
 
     // Spawn the command with process group and await result
     let result = spawn_command(&final_args, app_port, &url, config, cmd, &hostname, path).await;
