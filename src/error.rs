@@ -11,6 +11,9 @@ pub enum NSLError {
         pid: u32,
     },
 
+    #[error("refusing to replace route owned by PID {pid}: {reason}")]
+    UnsafeRouteReplacement { pid: u32, reason: String },
+
     #[error("failed to acquire route lock")]
     LockFailed,
 

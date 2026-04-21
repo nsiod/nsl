@@ -288,6 +288,7 @@ mod tests {
             change_origin: false,
             path_prefix: "/".to_string(),
             strip_prefix: false,
+            owner: None,
         }
     }
 

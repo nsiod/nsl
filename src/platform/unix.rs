@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::routes::RouteOwner;
+
 /// Check if a process is alive by sending signal 0.
 ///
 /// `pid == 0` is treated as "alive" because it represents a static route
@@ -12,15 +14,97 @@ pub fn is_process_alive(pid: u32) -> bool {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok()
 }
 
-/// Send SIGTERM to an app process group.
-///
-/// On Unix the spawned child is a process group leader (via ProcessGroup::leader()),
-/// so SIGTERM to the group kills the shell and all its descendants (e.g. `next dev`).
-pub fn kill_app_process(pid: u32) {
-    let _ = nix::sys::signal::killpg(
-        nix::unistd::Pid::from_raw(pid as i32),
+pub fn current_platform() -> &'static str {
+    std::env::consts::OS
+}
+
+pub fn current_process_group(pid: u32) -> Option<u32> {
+    nix::unistd::getpgid(Some(nix::unistd::Pid::from_raw(pid as i32)))
+        .ok()
+        .and_then(|pgid| u32::try_from(pgid.as_raw()).ok())
+}
+
+#[cfg(target_os = "linux")]
+pub fn current_process_start_time(pid: u32) -> Option<u64> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = stat.rsplit_once(") ")?.1;
+    after_comm.split_whitespace().nth(19)?.parse().ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn current_process_start_time(_pid: u32) -> Option<u64> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn process_cwd(pid: u32) -> Option<String> {
+    fs::read_link(format!("/proc/{pid}/cwd"))
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_cwd(_pid: u32) -> Option<String> {
+    None
+}
+
+fn validate_app_owner(owner: &RouteOwner) -> anyhow::Result<()> {
+    if owner.platform != current_platform() {
+        anyhow::bail!(
+            "route owner platform is {}, current platform is {}",
+            owner.platform,
+            current_platform()
+        );
+    }
+    if !is_process_alive(owner.pid) {
+        anyhow::bail!("route owner process is not alive");
+    }
+    match (owner.process_group, current_process_group(owner.pid)) {
+        (Some(expected), Some(actual)) if expected == actual && actual == owner.pid => {}
+        (Some(expected), Some(actual)) => {
+            anyhow::bail!(
+                "route owner process group changed: expected {}, got {}",
+                expected,
+                actual
+            );
+        }
+        _ => anyhow::bail!("could not verify route owner process group"),
+    }
+
+    if let Some(expected) = owner.start_time {
+        match current_process_start_time(owner.pid) {
+            Some(actual) if actual == expected => {}
+            Some(actual) => {
+                anyhow::bail!(
+                    "route owner start time changed: expected {}, got {}",
+                    expected,
+                    actual
+                );
+            }
+            None => anyhow::bail!("could not verify route owner start time"),
+        }
+    }
+
+    if let Some(cwd) = process_cwd(owner.pid)
+        && cwd != owner.cwd
+    {
+        anyhow::bail!(
+            "route owner cwd changed: expected {}, got {}",
+            owner.cwd,
+            cwd
+        );
+    }
+
+    Ok(())
+}
+
+pub fn kill_app_process(owner: &RouteOwner) -> anyhow::Result<()> {
+    validate_app_owner(owner)?;
+    nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(owner.pid as i32),
         nix::sys::signal::Signal::SIGTERM,
-    );
+    )
+    .map_err(|e| anyhow::anyhow!("failed to terminate app process group {}: {}", owner.pid, e))
 }
 
 /// Send SIGTERM to a process. Returns `Ok(())` on success.

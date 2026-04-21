@@ -9,6 +9,8 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
 };
 
+use crate::routes::RouteOwner;
+
 /// Combined creation flags that fully detach a spawned child: no inherited
 /// console, new process group (so Ctrl+C on the parent doesn't propagate),
 /// and no visible console window.
@@ -58,10 +60,35 @@ pub fn is_process_alive(pid: u32) -> bool {
     exit_code == STILL_ACTIVE as u32
 }
 
-/// Kill an app process by PID. On Windows there is no process-group concept
-/// equivalent to Unix SIGTERM-to-group, so we terminate the process directly.
-pub fn kill_app_process(pid: u32) {
-    let _ = terminate_process(pid);
+pub fn current_platform() -> &'static str {
+    std::env::consts::OS
+}
+
+pub fn current_process_group(_pid: u32) -> Option<u32> {
+    None
+}
+
+pub fn current_process_start_time(_pid: u32) -> Option<u64> {
+    None
+}
+
+fn validate_app_owner(owner: &RouteOwner) -> anyhow::Result<()> {
+    if owner.platform != current_platform() {
+        anyhow::bail!(
+            "route owner platform is {}, current platform is {}",
+            owner.platform,
+            current_platform()
+        );
+    }
+    if !is_process_alive(owner.pid) {
+        anyhow::bail!("route owner process is not alive");
+    }
+    Ok(())
+}
+
+pub fn kill_app_process(owner: &RouteOwner) -> anyhow::Result<()> {
+    validate_app_owner(owner)?;
+    terminate_process(owner.pid)
 }
 
 /// Terminate a process. Windows has no SIGTERM concept -- this is closer to

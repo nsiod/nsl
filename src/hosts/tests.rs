@@ -256,6 +256,7 @@ fn test_collect_hostnames_from_routes() {
             change_origin: false,
             path_prefix: "/".to_string(),
             strip_prefix: false,
+            owner: None,
         },
         crate::routes::RouteMapping {
             hostname: "a-app.localhost".to_string(),
@@ -264,6 +265,7 @@ fn test_collect_hostnames_from_routes() {
             change_origin: false,
             path_prefix: "/".to_string(),
             strip_prefix: false,
+            owner: None,
         },
         crate::routes::RouteMapping {
             hostname: "b-app.localhost".to_string(),
@@ -272,6 +274,7 @@ fn test_collect_hostnames_from_routes() {
             change_origin: false,
             path_prefix: "/api".to_string(),
             strip_prefix: false,
+            owner: None,
         },
     ];
 
