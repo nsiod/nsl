@@ -121,13 +121,18 @@ impl RouteStore {
             r.hostname == hostname && normalize_path_prefix(&r.path_prefix) == norm_prefix
         }) && existing.pid != pid
             && (existing.pid == 0 || is_process_alive(existing.pid))
-            && !force
         {
-            return Err(NSLError::RouteConflict {
-                hostname: hostname.to_string(),
-                path_prefix: norm_prefix,
-                pid: existing.pid,
-            });
+            if !force {
+                return Err(NSLError::RouteConflict {
+                    hostname: hostname.to_string(),
+                    path_prefix: norm_prefix,
+                    pid: existing.pid,
+                });
+            }
+            // force=true: kill the orphaned app process before replacing the route
+            if existing.pid != 0 && is_process_alive(existing.pid) {
+                crate::platform::kill_app_process(existing.pid);
+            }
         }
 
         routes.retain(|r| {

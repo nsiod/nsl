@@ -58,6 +58,12 @@ pub fn is_process_alive(pid: u32) -> bool {
     exit_code == STILL_ACTIVE as u32
 }
 
+/// Kill an app process by PID. On Windows there is no process-group concept
+/// equivalent to Unix SIGTERM-to-group, so we terminate the process directly.
+pub fn kill_app_process(pid: u32) {
+    let _ = terminate_process(pid);
+}
+
 /// Terminate a process. Windows has no SIGTERM concept -- this is closer to
 /// SIGKILL, but it matches what users expect from `nsl stop` on Windows.
 pub fn terminate_process(pid: u32) -> anyhow::Result<()> {

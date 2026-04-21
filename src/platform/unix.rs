@@ -12,6 +12,17 @@ pub fn is_process_alive(pid: u32) -> bool {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok()
 }
 
+/// Send SIGTERM to an app process group.
+///
+/// On Unix the spawned child is a process group leader (via ProcessGroup::leader()),
+/// so SIGTERM to the group kills the shell and all its descendants (e.g. `next dev`).
+pub fn kill_app_process(pid: u32) {
+    let _ = nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(pid as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    );
+}
+
 /// Send SIGTERM to a process. Returns `Ok(())` on success.
 pub fn terminate_process(pid: u32) -> anyhow::Result<()> {
     let nix_pid = nix::unistd::Pid::from_raw(pid as i32);

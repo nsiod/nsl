@@ -174,20 +174,6 @@ pub async fn run_app(
         None => find_free_port(config.app_port_range.0, config.app_port_range.1)?,
     };
 
-    // Register route
-    let state_dir = config.resolve_state_dir();
-    let store = RouteStore::new(state_dir);
-    let pid = std::process::id();
-    store.add_route(
-        &hostname,
-        app_port,
-        pid,
-        config.app_force,
-        change_origin,
-        path,
-        strip_prefix,
-    )?;
-
     let url = format_url(
         &hostname,
         config.proxy_port,
@@ -199,14 +185,35 @@ pub async fn run_app(
     // Inject framework flags
     let final_args = replace_port_placeholders(&inject_framework_flags(cmd, app_port), app_port);
 
+    // Build route registration callback — called inside spawn_command right after the child
+    // process is created, so we can store the actual child PID in the route. This ensures
+    // orphaned app processes (nsl killed ungracefully) are detected on subsequent runs.
+    let state_dir_cb = config.resolve_state_dir();
+    let hostname_cb = hostname.clone();
+    let path_cb = path.to_string();
+    let app_force = config.app_force;
+    let on_child_spawned = move |child_pid: u32| {
+        RouteStore::new(state_dir_cb)
+            .add_route(
+                &hostname_cb,
+                app_port,
+                child_pid,
+                app_force,
+                change_origin,
+                &path_cb,
+                strip_prefix,
+            )
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    };
+
     // Spawn the command with process group and await result
-    let result = spawn_command(&final_args, app_port, &url, config, cmd, &hostname, path).await;
+    let result =
+        spawn_command(&final_args, app_port, &url, config, cmd, &hostname, path, on_child_spawned)
+            .await;
 
     // Cleanup route on exit
-    let state_dir = config.resolve_state_dir();
-    let store = RouteStore::new(state_dir);
     let path_filter = if path == "/" { None } else { Some(path) };
-    let _ = store.remove_route(&hostname, path_filter);
+    let _ = RouteStore::new(config.resolve_state_dir()).remove_route(&hostname, path_filter);
 
     match result {
         Ok(0) => Ok(()),
@@ -218,6 +225,11 @@ pub async fn run_app(
 /// Spawn a child process with signal forwarding. On Unix the child is
 /// placed in its own process group so we can signal the whole tree; on
 /// Windows we use a plain tokio `Child` and kill it on Ctrl+C.
+///
+/// `on_child_spawned` is called synchronously with the child PID immediately
+/// after the child is created. If it returns an error the child is killed and
+/// the error is propagated. This lets the caller register a route using the
+/// real child PID rather than the nsl parent PID.
 #[cfg(unix)]
 async fn spawn_command(
     args: &[String],
@@ -227,6 +239,7 @@ async fn spawn_command(
     original_cmd: &[String],
     hostname: &str,
     path: &str,
+    on_child_spawned: impl FnOnce(u32) -> anyhow::Result<()>,
 ) -> anyhow::Result<i32> {
     use process_wrap::tokio::*;
 
@@ -247,6 +260,16 @@ async fn spawn_command(
     let mut child = wrap.spawn()?;
 
     let child_pid = child.id().unwrap_or(0);
+
+    // Register route (or perform any caller-requested setup) using the child PID.
+    // Kill the child immediately if this fails (e.g. route conflict).
+    if let Err(e) = on_child_spawned(child_pid) {
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(child_pid as i32),
+            nix::sys::signal::Signal::SIGTERM,
+        );
+        return Err(e);
+    }
 
     // Wait for app readiness
     if let Err(e) = wait_for_app_wrapped(port, config.ready_timeout, &mut child).await {
@@ -295,6 +318,7 @@ async fn spawn_command(
     original_cmd: &[String],
     hostname: &str,
     path: &str,
+    on_child_spawned: impl FnOnce(u32) -> anyhow::Result<()>,
 ) -> anyhow::Result<i32> {
     use framework::wait_for_app;
 
@@ -306,6 +330,11 @@ async fn spawn_command(
 
     let mut child = cmd.spawn()?;
     let child_pid = child.id().unwrap_or(0);
+
+    if let Err(e) = on_child_spawned(child_pid) {
+        let _ = child.start_kill();
+        return Err(e);
+    }
 
     if let Err(e) = wait_for_app(port, config.ready_timeout, &mut child).await {
         tracing::error!("readiness check failed: {}", e);
