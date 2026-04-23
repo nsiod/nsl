@@ -33,6 +33,24 @@ pub struct RouteMapping {
     /// Strip the matched prefix before forwarding.
     #[serde(default)]
     pub strip_prefix: bool,
+    /// Process identity recorded by `nsl run`.
+    ///
+    /// Older routes and static routes may not have this field. Dynamic routes
+    /// without owner metadata are not eligible for automatic forced cleanup.
+    #[serde(default)]
+    pub owner: Option<RouteOwner>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RouteOwner {
+    pub pid: u32,
+    pub platform: String,
+    pub cwd: String,
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub process_group: Option<u32>,
+    #[serde(default)]
+    pub start_time: Option<u64>,
 }
 
 fn default_path_prefix() -> String {
@@ -111,6 +129,30 @@ impl RouteStore {
         path_prefix: &str,
         strip_prefix: bool,
     ) -> Result<(), NSLError> {
+        self.add_route_with_owner(
+            hostname,
+            port,
+            pid,
+            None,
+            force,
+            change_origin,
+            path_prefix,
+            strip_prefix,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_route_with_owner(
+        &self,
+        hostname: &str,
+        port: u16,
+        pid: u32,
+        owner: Option<RouteOwner>,
+        force: bool,
+        change_origin: bool,
+        path_prefix: &str,
+        strip_prefix: bool,
+    ) -> Result<(), NSLError> {
         self.ensure_dir()?;
         let _lock = self.acquire_lock()?;
 
@@ -121,13 +163,31 @@ impl RouteStore {
             r.hostname == hostname && normalize_path_prefix(&r.path_prefix) == norm_prefix
         }) && existing.pid != pid
             && (existing.pid == 0 || is_process_alive(existing.pid))
-            && !force
         {
-            return Err(NSLError::RouteConflict {
-                hostname: hostname.to_string(),
-                path_prefix: norm_prefix,
-                pid: existing.pid,
-            });
+            if !force {
+                return Err(NSLError::RouteConflict {
+                    hostname: hostname.to_string(),
+                    path_prefix: norm_prefix,
+                    pid: existing.pid,
+                });
+            }
+
+            if existing.pid != 0 {
+                let owner =
+                    existing
+                        .owner
+                        .as_ref()
+                        .ok_or_else(|| NSLError::UnsafeRouteReplacement {
+                            pid: existing.pid,
+                            reason: "route has no owner metadata".to_string(),
+                        })?;
+                crate::platform::kill_app_process(owner).map_err(|e| {
+                    NSLError::UnsafeRouteReplacement {
+                        pid: existing.pid,
+                        reason: e.to_string(),
+                    }
+                })?;
+            }
         }
 
         routes.retain(|r| {
@@ -140,6 +200,7 @@ impl RouteStore {
             change_origin,
             path_prefix: norm_prefix,
             strip_prefix,
+            owner,
         });
 
         self.save_routes(&routes)?;
@@ -165,6 +226,33 @@ impl RouteStore {
             }
             None => {
                 routes.retain(|r| r.hostname != hostname);
+            }
+        }
+        self.save_routes(&routes)?;
+        Ok(())
+    }
+
+    pub fn remove_route_for_pid(
+        &self,
+        hostname: &str,
+        path_prefix: Option<&str>,
+        pid: u32,
+    ) -> Result<(), NSLError> {
+        self.ensure_dir()?;
+        let _lock = self.acquire_lock()?;
+
+        let mut routes = self.load_routes()?;
+        match path_prefix {
+            Some(prefix) => {
+                let norm = normalize_path_prefix(prefix);
+                routes.retain(|r| {
+                    !(r.hostname == hostname
+                        && normalize_path_prefix(&r.path_prefix) == norm
+                        && r.pid == pid)
+                });
+            }
+            None => {
+                routes.retain(|r| !(r.hostname == hostname && r.pid == pid));
             }
         }
         self.save_routes(&routes)?;
@@ -223,6 +311,17 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn test_owner(pid: u32) -> RouteOwner {
+        RouteOwner {
+            pid,
+            platform: crate::platform::current_platform().to_string(),
+            cwd: "/tmp/nsl-test".to_string(),
+            command: vec!["sh".to_string(), "-c".to_string(), "sleep 60".to_string()],
+            process_group: None,
+            start_time: None,
+        }
+    }
+
     #[test]
     fn test_add_and_load_route() {
         let tmp = TempDir::new().unwrap();
@@ -241,6 +340,29 @@ mod tests {
     }
 
     #[test]
+    fn test_add_route_with_owner_persists_owner() {
+        let tmp = TempDir::new().unwrap();
+        let store = RouteStore::new(tmp.path().to_path_buf());
+        let owner = test_owner(0);
+
+        store
+            .add_route_with_owner(
+                "myapp.localhost",
+                4000,
+                0,
+                Some(owner.clone()),
+                false,
+                false,
+                "/",
+                false,
+            )
+            .unwrap();
+
+        let routes = store.load_routes().unwrap();
+        assert_eq!(routes[0].owner, Some(owner));
+    }
+
+    #[test]
     fn test_remove_route() {
         let tmp = TempDir::new().unwrap();
         let store = RouteStore::new(tmp.path().to_path_buf());
@@ -252,6 +374,27 @@ mod tests {
 
         let routes = store.load_routes().unwrap();
         assert!(routes.is_empty());
+    }
+
+    #[test]
+    fn test_remove_route_for_pid_does_not_remove_replacement() {
+        let tmp = TempDir::new().unwrap();
+        let store = RouteStore::new(tmp.path().to_path_buf());
+
+        store
+            .add_route("myapp.localhost", 4000, 0, false, false, "/", false)
+            .unwrap();
+        store
+            .add_route("myapp.localhost", 4001, 0, true, false, "/", false)
+            .unwrap();
+
+        store
+            .remove_route_for_pid("myapp.localhost", None, 12345)
+            .unwrap();
+
+        let routes = store.load_routes().unwrap();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].port, 4001);
     }
 
     #[test]
@@ -274,6 +417,23 @@ mod tests {
             .unwrap();
         let routes = store.load_routes().unwrap();
         assert_eq!(routes[0].port, 4001);
+    }
+
+    #[test]
+    fn test_force_refuses_live_dynamic_route_without_owner() {
+        let tmp = TempDir::new().unwrap();
+        let store = RouteStore::new(tmp.path().to_path_buf());
+        let pid = std::process::id();
+
+        store
+            .add_route("myapp.localhost", 4000, pid, false, false, "/", false)
+            .unwrap();
+
+        let result = store.add_route("myapp.localhost", 4001, 0, true, false, "/", false);
+        assert!(matches!(
+            result,
+            Err(NSLError::UnsafeRouteReplacement { pid: got, .. }) if got == pid
+        ));
     }
 
     #[test]

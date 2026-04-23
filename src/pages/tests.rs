@@ -80,6 +80,7 @@ fn test_render_not_found_body_with_routes() {
             change_origin: false,
             path_prefix: "/".to_string(),
             strip_prefix: false,
+            owner: None,
         },
         RouteMapping {
             hostname: "api.localhost".to_string(),
@@ -88,6 +89,7 @@ fn test_render_not_found_body_with_routes() {
             change_origin: true,
             path_prefix: "/api".to_string(),
             strip_prefix: false,
+            owner: None,
         },
     ];
     let body = render_not_found_body("unknown.localhost", &routes);
