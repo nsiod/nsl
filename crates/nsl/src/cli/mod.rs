@@ -152,6 +152,15 @@ pub(super) enum Commands {
         #[command(subcommand)]
         action: HostsAction,
     },
+
+    /// QUIC tunnel for exposing local services to a remote server
+    #[command(
+        after_help = "Configuration is read from [tunnel] in nsl.toml. See docs for the server-side setup and token issuance."
+    )]
+    Tunnel {
+        #[command(subcommand)]
+        action: TunnelAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -160,6 +169,27 @@ pub(super) enum HostsAction {
     Sync,
     /// Remove nsl entries from /etc/hosts
     Clean,
+}
+
+#[derive(Subcommand)]
+pub(super) enum TunnelAction {
+    /// Run the tunnel client (connect to a server from the local daemon)
+    Connect {
+        /// Server endpoint (host:port), required.
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// Client identifier the server looks up to decide which public
+        /// domain to assign (e.g. `alice`). Accepts `--domain` as a
+        /// legacy alias.
+        #[arg(long, alias = "domain")]
+        id: Option<String>,
+        /// Authentication key (out-of-band issued)
+        #[arg(long)]
+        key: Option<String>,
+    },
+
+    /// Show tunnel status (client-side)
+    Status,
 }
 
 /// Apply CLI flag overrides to a config.

@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1.7
+#
+# Local-only nsld image. Builds from source against the host's
+# architecture, no QEMU, no multi-arch dance. Used by:
+#
+#   just docker-build-local
+#   docker build -f crates/nsld/Dockerfile.local -t nsld:local .
+#
+# For the multi-arch image published to Docker Hub, see `Dockerfile`
+# (which expects pre-built release binaries staged into the build
+# context by `.github/workflows/docker.yml`).
+
+# ── Stage 1: builder ─────────────────────────────────────────────────
+FROM rust:1-alpine3.22 AS builder
+
+RUN apk add --no-cache musl-dev pkgconfig
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+
+ENV CARGO_TERM_COLOR=always
+RUN cargo build --release --bin nsld --locked
+
+# ── Stage 2: runtime ─────────────────────────────────────────────────
+FROM alpine:3.22
+
+RUN apk add --no-cache ca-certificates tini \
+    && update-ca-certificates
+
+COPY --from=builder /src/target/release/nsld /usr/local/bin/nsld
+
+WORKDIR /data
+VOLUME ["/data"]
+
+EXPOSE 80/tcp
+EXPOSE 443/tcp
+EXPOSE 443/udp
+
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/nsld"]
+CMD ["serve"]

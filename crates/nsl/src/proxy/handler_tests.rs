@@ -49,7 +49,7 @@ async fn test_http1_routing_with_auto_builder() {
                         proxy_port,
                         10,
                         cache,
-                        Arc::new(vec!["localhost".to_string()]),
+                        Arc::new(std::sync::RwLock::new(vec!["localhost".to_string()])),
                         false,
                     )
                     .await
@@ -123,7 +123,7 @@ async fn test_http2_prior_knowledge_routing() {
                         proxy_port,
                         10,
                         cache,
-                        Arc::new(vec!["localhost".to_string()]),
+                        Arc::new(std::sync::RwLock::new(vec!["localhost".to_string()])),
                         false,
                     )
                     .await
@@ -200,7 +200,7 @@ async fn test_http2_no_route_returns_404() {
                         proxy_port,
                         10,
                         cache,
-                        Arc::new(vec!["localhost".to_string()]),
+                        Arc::new(std::sync::RwLock::new(vec!["localhost".to_string()])),
                         false,
                     )
                     .await

@@ -1,5 +1,3 @@
-use crate::routes::RouteMapping;
-
 /// Escape HTML special characters to prevent XSS.
 pub fn escape_html(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
@@ -169,11 +167,6 @@ pre code {{
 .footer a:hover {{
   text-decoration: underline;
 }}
-.no-routes {{
-  text-align: center;
-  color: var(--fg-muted);
-  padding: 24px;
-}}
 </style>
 </head>
 <body>
@@ -198,68 +191,33 @@ pre code {{
 }
 
 /// Render the body HTML for a 404 page (unregistered hostname).
-pub fn render_not_found_body(hostname: &str, routes: &[RouteMapping]) -> String {
+pub fn render_not_found_body(hostname: &str) -> String {
     let safe_host = escape_html(hostname);
-
-    let routes_html = if routes.is_empty() {
-        r#"<div class="no-routes">No active routes registered.</div>"#.to_string()
-    } else {
-        let mut cards = String::new();
-        for r in routes {
-            let prefix_label = if r.path_prefix == "/" {
-                String::new()
-            } else {
-                escape_html(&r.path_prefix).to_string()
-            };
-            let detail_parts: Vec<String> = [
-                Some(format!("port {}", r.port)),
-                if prefix_label.is_empty() {
-                    None
-                } else {
-                    Some(format!("path {}", prefix_label))
-                },
-                if r.change_origin {
-                    Some("changeOrigin".to_string())
-                } else {
-                    None
-                },
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-
-            cards.push_str(&format!(
-                r#"<div class="card"><div class="card-hostname">{hostname}</div><div class="card-detail">{detail}</div></div>"#,
-                hostname = escape_html(&r.hostname),
-                detail = escape_html(&detail_parts.join(" / ")),
-            ));
-        }
-        cards
-    };
 
     format!(
         r#"<p>No application is registered for <code>{host}</code>.</p>
 <div style="margin-top:24px">
-  <div class="section-title">Active Routes</div>
-  {routes_html}
+  <div class="section-title">What to do</div>
+  <div class="card">
+    <p>Run <code>nsl status</code> to view active routes and proxy configuration.</p>
+  </div>
 </div>"#,
         host = safe_host,
-        routes_html = routes_html,
     )
 }
 
 /// Render the body HTML for a 502 page (target app not responding).
-pub fn render_bad_gateway_body(hostname: &str, port: u16) -> String {
+pub fn render_bad_gateway_body(hostname: &str) -> String {
     let safe_host = escape_html(hostname);
     format!(
         r#"<div class="tip-box">
-  <p>The application registered for <code>{host}</code> (port {port}) is not responding.</p>
+  <p>The application registered for <code>{host}</code> is not responding.</p>
   <p>It may have crashed or is still starting up.</p>
 </div>
 <div style="margin-top:24px">
   <div class="section-title">Troubleshooting</div>
   <div class="card">
-    <p>1. Check if your app is running on port <code>{port}</code>.</p>
+    <p>1. Run <code>nsl status</code> to check the route and its port.</p>
   </div>
   <div class="card">
     <p>2. Look at your app's terminal output for errors.</p>
@@ -270,7 +228,6 @@ pub fn render_bad_gateway_body(hostname: &str, port: u16) -> String {
   </div>
 </div>"#,
         host = safe_host,
-        port = port,
     )
 }
 

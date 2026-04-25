@@ -13,10 +13,22 @@ const repoRoot = dirname(npmDir);
 
 function readCargoVersion() {
   const toml = readFileSync(join(repoRoot, "Cargo.toml"), "utf8");
-  const pkgSection = toml.split(/^\[[^\]]+\]/m)[1] ?? toml;
+  const pkgSection =
+    findTomlSection(toml, "package") ??
+    findTomlSection(toml, "workspace.package") ??
+    toml;
   const match = pkgSection.match(/^version\s*=\s*"([^"]+)"/m);
-  if (!match) throw new Error("could not find [package].version in Cargo.toml");
+  if (!match) throw new Error("could not find package version in Cargo.toml");
   return match[1];
+}
+
+function findTomlSection(toml, name) {
+  const header = `[${name}]`;
+  const start = toml.indexOf(`${header}\n`);
+  if (start === -1) return null;
+  const bodyStart = start + header.length + 1;
+  const next = toml.slice(bodyStart).search(/^\[[^\]]+\]/m);
+  return next === -1 ? toml.slice(bodyStart) : toml.slice(bodyStart, bodyStart + next);
 }
 
 const version = process.argv[2] ?? readCargoVersion();

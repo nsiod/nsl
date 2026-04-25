@@ -137,6 +137,8 @@ pub(super) fn load_certified_key(
     cert_path: &Path,
     key_path: &Path,
 ) -> anyhow::Result<CertifiedKey> {
+    install_ring_provider_once();
+
     let cert_pem = fs::read(cert_path)?;
     let key_pem = fs::read(key_path)?;
 
@@ -227,6 +229,8 @@ pub fn build_tls_server_config(
     cert_paths: &CertPaths,
     state_dir: PathBuf,
 ) -> anyhow::Result<rustls::ServerConfig> {
+    install_ring_provider_once();
+
     let resolver =
         SniCertResolver::new(&cert_paths.server_cert, &cert_paths.server_key, state_dir)?;
 
@@ -237,6 +241,14 @@ pub fn build_tls_server_config(
     config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
     Ok(config)
+}
+
+fn install_ring_provider_once() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
 }
 
 // ---------------------------------------------------------------------------

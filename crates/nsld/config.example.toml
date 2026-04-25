@@ -1,0 +1,200 @@
+# nsld — example configuration
+#
+# ⚠️  SECURITY: nsld with no auth is open to the internet. Read
+# `SECURITY.md` next to this file before deploying — pick either an
+# external reverse proxy in front (Traefik / Caddy / nginx) OR turn on
+# the built-in `[forward_auth]` block at the bottom of this file. Don't
+# ship an unauthenticated nsld to a public IP.
+#
+# Copy to `config.toml` (or `nsld.toml`) next to your `nsld` binary, or
+# keep it in `state_dir/config.toml`. All paths are resolved from
+# `state_dir`; there are no other on-disk locations.
+#
+# Override sources, in ascending priority:
+#   TOML file  <  environment variables  <  CLI flags
+#
+# Minimal working config:
+#
+#   state_dir = "./data"
+#
+#   [server]
+#   base_domain = "nsl.example.com"
+
+# Where persistent state lives. Resolved relative to the working
+# directory when you start `nsld`. Default: `./data`.
+#
+# Layout under state_dir:
+#   identity.pem         QUIC self-signed cert (stable `server_id`)
+#   tokens.toml          tenant → pre-shared key mappings
+#   acme/account.key     ACME account credentials
+#   acme/certs/*.pem     per-tenant wildcard certs (cert chain + key)
+state_dir = "./data"
+
+
+# --- QUIC tunnel plane (what nsl clients dial) -------------------------
+
+[server]
+# UDP listen address for the QUIC tunnel. Defaults to `:443` so the
+# traffic blends into standard HTTP/3 UDP flows.
+listen = ":443"
+
+# Apex domain this server is authoritative for. Tenant token entries in
+# tokens.toml live under this (e.g. `alice.nsl.example.com`).
+base_domain = "nsl.example.com"
+
+
+# --- Public HTTP(S) edge (what browsers/curl hit) ----------------------
+#
+# Whenever `https_listen` is set, a private CA at
+# `state_dir/default-ca.pem` is generated (or reused) and used to
+# sign per-tenant leaf certs stored under `state_dir/default-certs/`.
+# This is the always-on fallback.
+#
+# When `[acme].enable = true`, the ACME manager runs in parallel: each
+# tenant starts with the default-CA leaf (installed instantly on first
+# session) and gets transparently upgraded to a publicly-trusted ACME
+# cert once issuance succeeds. If ACME keeps failing (DNS misconfig,
+# rate limits, etc.), the default CA leaf keeps serving — HTTPS never
+# stops working.
+#
+# Summary of the three operating modes:
+#
+#   1. `https_listen` set + acme.enable = true
+#        → ACME certs preferred, default CA as fallback.
+#        → `http_listen` does a 301 redirect to HTTPS.
+#
+#   2. `https_listen` set + acme.enable = false
+#        → Default CA only. Import `default-ca.pem` into your OS /
+#          browser trust store once to silence warnings across every
+#          tenant; CA fingerprint prints to stdout at startup.
+#        → `http_listen` does a 301 redirect to HTTPS.
+#
+#   3. `https_listen` unset/empty + acme.enable = false
+#        → Plain HTTP only. Suitable when an external reverse proxy
+#          (nginx, traefik) terminates TLS in front of nsld.
+
+[public]
+# HTTPS edge.
+#   - With ACME enabled: auto-defaults to `:443` if unset.
+#   - With ACME disabled: leave unset/empty to run plain HTTP only, or
+#     set it explicitly to serve self-signed default certs.
+https_listen = ":443"
+
+# Plain HTTP edge. Behavior depends on `https_listen`:
+#   HTTPS on  → 301 redirect to https://{host}{uri}
+#   HTTPS off → direct HTTP routing to tenant sessions
+# Set to an empty string to disable the :80 listener entirely.
+http_listen = ":80"
+
+
+# --- ACME wildcard issuance (DNS-01 via httpreq webhook) ---------------
+
+[acme]
+# Master switch. When false, the public edge serves plain HTTP only and
+# no ACME account / cert storage is touched.
+enable = true
+
+# Contact address Let's Encrypt will email for expiry / policy notices.
+contact_email = "admin@example.com"
+
+# ACME directory URL.
+#   Production: https://acme-v02.api.letsencrypt.org/directory
+#   Staging:    https://acme-staging-v02.api.letsencrypt.org/directory
+# Use staging until you've validated the full issuance flow — LE prod
+# has strict rate limits (50 certs / registered domain / week).
+directory = "https://acme-v02.api.letsencrypt.org/directory"
+
+
+# --- DNS-01 webhook (lego `httpreq` convention) ------------------------
+#
+# For each new tenant that comes online, nsld will:
+#   1. POST {httpreq_url}/present {"fqdn":"_acme-challenge.<tenant>.","value":"<txt>"}
+#   2. Wait propagation_wait_secs for DNS to propagate
+#   3. Tell Let's Encrypt to validate
+#   4. POST {httpreq_url}/cleanup {...} after issuance
+#
+# HTTP Basic Auth is used; both username and password must be set
+# together. Any provider that speaks this convention works (lego's
+# httpreq, dnsall.com, or your own webhook).
+#
+# ⚠️  OUT-OF-BAND SETUP PER TENANT (not done by nsld):
+#   Some providers (e.g. dnsall.com, acme-dns style services) require
+#   each tenant domain to be registered with them BEFORE the first
+#   /present call, otherwise they return HTTP 403 and nsld will log a
+#   "pre-registered" hint and retry on the next renewal cycle. Typical
+#   workflow for these providers:
+#
+#     1. For each tenant `<t>.<base_domain>`:
+#        - Register the domain in the provider's dashboard/API.
+#        - Note the CNAME target they assign.
+#        - Add `_acme-challenge.<t>.<base_domain>  CNAME  <target>`
+#          to your own DNS zone.
+#     2. Start the tenant's nsl client — cert issuance will succeed.
+#
+#   Providers that let a single API key write anywhere in your zone
+#   (Cloudflare-style httpreq adapters) don't need step 1.
+#
+# Env var alternatives (override the TOML fields if set):
+#   HTTPREQ_ENDPOINT, HTTPREQ_USERNAME, HTTPREQ_PASSWORD
+httpreq_url      = "https://api.dnsall.com"
+httpreq_username = "your-dnsall-user"
+httpreq_password = "your-dnsall-api-key"   # api_key from /api/profile, not login password
+
+# How long to wait after publishing the TXT record before asking the CA
+# to validate. dnsall.com propagates synchronously (5s is plenty);
+# other providers that lean on public DNS may need 30-60s.
+propagation_wait_secs = 5
+
+# Renew when the stored cert has fewer than this many days left. LE
+# issues 90-day certs, so 30 leaves a 60-day comfort window.
+renewal_threshold_days = 30
+
+
+# --- Forward-auth gate (optional, DEFAULT OFF) -------------------------
+#
+# When enabled, every public request arriving at nsld is first bounced
+# off an external authorization endpoint (Traefik / Caddy / nginx's
+# `auth_request` convention). Only requests the auth endpoint clears
+# with a 2xx make it through the QUIC tunnel to the tenant.
+#
+# Wire:
+#   GET {address}
+#     X-Forwarded-Method:  <original method>
+#     X-Forwarded-Proto:   http | https
+#     X-Forwarded-Host:    <original Host>
+#     X-Forwarded-Uri:     <original path + query>
+#     X-Forwarded-For:     <client IP>
+#     Cookie / Authorization:  forwarded verbatim
+#
+# Response:
+#   2xx    → allow. Headers in `response_headers` get prepended to the
+#            request as extra `X-Auth-User: alice` style lines before
+#            the tunnel sees it.
+#   3xx    → short-circuit with the redirect (login flow).
+#   4xx/5xx → short-circuit with that status + body.
+#
+# Fail-closed: if the auth endpoint is unreachable, the client gets a
+# 502 — no request ever reaches a tenant.
+
+[forward_auth]
+enable = false                                # ← leave false by default
+address = "https://auth.example.com/verify"
+
+# Named auth-response headers to forward to the tenant upstream.
+# Useful for passing authenticated user identity to the app behind nsl.
+response_headers = ["X-Auth-User", "X-Auth-Groups"]
+
+# Additional client-side headers to forward to the auth endpoint.
+# `Cookie` and `Authorization` are always forwarded; list extras here.
+request_headers = []
+
+# Path prefixes that bypass the gate entirely (health checks, public
+# callbacks, OAuth return URLs, etc.).
+bypass_prefixes = ["/health", "/.well-known/acme-challenge/"]
+
+# Per-probe timeout in seconds.
+timeout_secs = 5
+
+# Verify the auth endpoint's TLS cert. Default true. Set false only
+# when pointing at an internal self-signed auth service.
+tls_verify = true

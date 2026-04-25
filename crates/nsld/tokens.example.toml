@@ -1,0 +1,24 @@
+# nsld — example tenant tokens file
+#
+# Copy to `{state_dir}/tokens.toml` (default: `./data/tokens.toml`).
+# Edits are picked up live — the file watcher hot-reloads on changes,
+# so you don't need to restart nsld when adding or rotating tokens.
+#
+# Each nested table `[tokens.<id>]` defines one client:
+#   - the table key is the `id` the client sends in Hello
+#   - `domain` is the public tenant domain the server assigns back
+#   - `key` is the shared HMAC secret
+#
+# The client never asserts its own domain — it only knows its `id` and
+# `key`. The server is authoritative on domain assignment.
+#
+# Generate strong keys with:
+#   openssl rand -base64 32
+
+[tokens.alice]
+domain = "alice.nsl.example.com"
+key    = "nslk_REPLACE_ME_base64_secret_for_alice"
+
+[tokens.bob]
+domain = "bob.nsl.example.com"
+key    = "nslk_REPLACE_ME_base64_secret_for_bob"

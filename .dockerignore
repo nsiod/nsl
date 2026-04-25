@@ -1,0 +1,16 @@
+# Keep the docker build context small. The Dockerfiles only need
+# Cargo.toml, Cargo.lock, and crates/.
+
+target/
+.git/
+.github/
+tests/
+npm/
+*.md
+*.lock
+docs/
+.vscode/
+.idea/
+
+# Keep Cargo.lock — we copy it explicitly in the Dockerfile.
+!Cargo.lock

@@ -13,6 +13,27 @@ pub struct RawConfig {
     pub proxy: Option<RawProxy>,
     pub app: Option<RawApp>,
     pub paths: Option<RawPaths>,
+    pub tunnel: Option<RawTunnel>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+pub struct RawTunnel {
+    /// Whether to enable the QUIC tunnel client.
+    pub enable: Option<bool>,
+    /// Opaque client handle the tunnel server looks up to decide which
+    /// public domain to assign (e.g. `"alice"`). The server returns the
+    /// assigned domain during the handshake; we add it to the allowed
+    /// proxy domains list at that point.
+    #[serde(default, alias = "domain")]
+    pub id: Option<String>,
+    /// Authentication key (token) issued out-of-band by the server operator.
+    pub key: Option<String>,
+    /// Endpoint to dial (e.g. "tunnel.nsl.example.com:443"). Required.
+    pub endpoint: Option<String>,
+    /// SHA-256(DER) fingerprint of the server's self-signed cert. 64 hex
+    /// chars (optionally colon-separated or `sha256:`-prefixed). Obtained
+    /// out of band from the server operator.
+    pub server_id: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -81,6 +102,17 @@ pub struct Config {
     pub app_force: bool,
     pub ready_timeout: u64,
     pub state_dir: Option<PathBuf>,
+    pub tunnel: TunnelConfig,
+}
+
+/// Resolved tunnel configuration (client-side).
+#[derive(Debug, Clone, Default)]
+pub struct TunnelConfig {
+    pub enable: bool,
+    pub id: Option<String>,
+    pub key: Option<String>,
+    pub endpoint: Option<String>,
+    pub server_id: Option<String>,
 }
 
 /// Resolved display override for a single domain suffix.
@@ -130,6 +162,7 @@ impl Default for Config {
             app_force: false,
             ready_timeout: 30,
             state_dir: None,
+            tunnel: TunnelConfig::default(),
         }
     }
 }
@@ -156,6 +189,13 @@ impl RawConfig {
             }),
             paths: merge_opt(self.paths, other.paths, |a, b| RawPaths {
                 state_dir: b.state_dir.or(a.state_dir),
+            }),
+            tunnel: merge_opt(self.tunnel, other.tunnel, |a, b| RawTunnel {
+                enable: b.enable.or(a.enable),
+                id: b.id.or(a.id),
+                key: b.key.or(a.key),
+                endpoint: b.endpoint.or(a.endpoint),
+                server_id: b.server_id.or(a.server_id),
             }),
         }
     }
@@ -184,6 +224,39 @@ impl RawConfig {
         }
         if let Ok(val) = std::env::var("NSL_STATE_DIR") {
             self.paths.get_or_insert_with(Default::default).state_dir = Some(val);
+        }
+        if let Ok(val) = std::env::var("NSL_TUNNEL_ENABLE") {
+            let enable = matches!(val.as_str(), "1" | "true" | "yes");
+            self.tunnel.get_or_insert_with(Default::default).enable = Some(enable);
+        }
+        // `NSL_TUNNEL_ID` is the new name; `NSL_TUNNEL_DOMAIN` is accepted
+        // as a legacy alias so old deployments keep working.
+        for var in ["NSL_TUNNEL_ID", "NSL_TUNNEL_DOMAIN"] {
+            if let Ok(val) = std::env::var(var) {
+                let v = val.trim().to_string();
+                if !v.is_empty() {
+                    self.tunnel.get_or_insert_with(Default::default).id = Some(v);
+                    break;
+                }
+            }
+        }
+        if let Ok(val) = std::env::var("NSL_TUNNEL_KEY") {
+            let v = val.trim().to_string();
+            if !v.is_empty() {
+                self.tunnel.get_or_insert_with(Default::default).key = Some(v);
+            }
+        }
+        if let Ok(val) = std::env::var("NSL_TUNNEL_ENDPOINT") {
+            let v = val.trim().to_string();
+            if !v.is_empty() {
+                self.tunnel.get_or_insert_with(Default::default).endpoint = Some(v);
+            }
+        }
+        if let Ok(val) = std::env::var("NSL_TUNNEL_SERVER_ID") {
+            let v = val.trim().to_string();
+            if !v.is_empty() {
+                self.tunnel.get_or_insert_with(Default::default).server_id = Some(v);
+            }
         }
         self
     }
@@ -244,7 +317,21 @@ impl RawConfig {
                 .as_ref()
                 .and_then(|p| p.state_dir.as_ref())
                 .map(PathBuf::from),
+            tunnel: resolve_tunnel(self.tunnel.as_ref()),
         }
+    }
+}
+
+fn resolve_tunnel(raw: Option<&RawTunnel>) -> TunnelConfig {
+    match raw {
+        None => TunnelConfig::default(),
+        Some(t) => TunnelConfig {
+            enable: t.enable.unwrap_or(false),
+            id: t.id.clone().filter(|s| !s.is_empty()),
+            key: t.key.clone().filter(|s| !s.is_empty()),
+            endpoint: t.endpoint.clone().filter(|s| !s.is_empty()),
+            server_id: t.server_id.clone().filter(|s| !s.is_empty()),
+        },
     }
 }
 
@@ -443,6 +530,19 @@ pub fn print_config() {
         "  state_dir:        {}",
         config.resolve_state_dir().display()
     );
+    println!("  tunnel.enable:    {}", config.tunnel.enable);
+    if let Some(ref id) = config.tunnel.id {
+        println!("  tunnel.id:        {}", id);
+    }
+    if let Some(ref e) = config.tunnel.endpoint {
+        println!("  tunnel.endpoint:  {}", e);
+    }
+    if config.tunnel.key.is_some() {
+        println!("  tunnel.key:       <set>");
+    }
+    if let Some(ref fp) = config.tunnel.server_id {
+        println!("  tunnel.server_id: {}", fp);
+    }
 
     println!();
     println!("Sources (lowest to highest priority):");

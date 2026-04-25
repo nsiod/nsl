@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rustls::server::ResolvesServerCert;
 use rustls::sign::CertifiedKey;
-use tokio::sync::Mutex;
 
 use super::{HOST_CERTS_DIR, generate_host_cert, is_cert_valid, load_certified_key};
 
@@ -99,8 +98,15 @@ impl SniCertResolver {
         }
 
         // Hold the lock for the entire resolve to prevent concurrent
-        // generation for the same hostname (race condition).
-        let mut cache = self.cache.blocking_lock();
+        // generation for the same hostname. This resolver is a synchronous
+        // rustls callback, so use a synchronous mutex here.
+        let mut cache = match self.cache.lock() {
+            Ok(cache) => cache,
+            Err(_) => {
+                tracing::warn!("SNI certificate cache is poisoned");
+                return Arc::clone(&self.default_key);
+            }
+        };
 
         if let Some(key) = cache.get(hostname) {
             return Arc::clone(key);

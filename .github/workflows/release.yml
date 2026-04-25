@@ -4,11 +4,17 @@ name: Release
 # Triggered by pushing a tag like `v0.1.0` or manually via workflow_dispatch.
 #
 # Packaging:
-#   Unix:    nsl-<version>-<subpkg>.tar.gz   (contains ./nsl)
-#   Windows: nsl-<version>-<subpkg>.zip      (contains nsl.exe)
+#   Unix:    nsl-<subpkg>.tar.gz    (contains ./nsl, client)
+#            nsld-<subpkg>.tar.gz   (contains ./nsld, server daemon)
+#   Windows: nsl-<subpkg>.zip       (contains nsl.exe)
+#            nsld-<subpkg>.zip      (contains nsld.exe)
+#
+# Docker images for nsld are built and pushed to Docker Hub by the
+# separate `docker.yml` workflow (also tag-triggered).
 #
 # Downstream: run the manual `npm` workflow with this tag to publish npm
-# platform subpackages from these release assets.
+# platform subpackages from these release assets (npm only consumes the
+# `nsl-*` archives, ignores `nsld-*`).
 on:
   push:
     tags:
@@ -52,19 +58,21 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }} --locked
 
-      - name: Package tarball
+      - name: Package tarballs
         run: |
           set -eu
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/nsl" nsl
-          chmod +x nsl
-          tar -czf "dist/nsl-${{ matrix.subpkg }}.tar.gz" nsl
-          rm nsl
+          for bin in nsl nsld; do
+            cp "target/${{ matrix.target }}/release/${bin}" "${bin}"
+            chmod +x "${bin}"
+            tar -czf "dist/${bin}-${{ matrix.subpkg }}.tar.gz" "${bin}"
+            rm "${bin}"
+          done
 
       - uses: actions/upload-artifact@v7
         with:
           name: asset-${{ matrix.subpkg }}
-          path: dist/nsl-${{ matrix.subpkg }}.tar.gz
+          path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
@@ -94,19 +102,21 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }} --locked
 
-      - name: Package tarball
+      - name: Package tarballs
         run: |
           set -eu
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/nsl" nsl
-          chmod +x nsl
-          tar -czf "dist/nsl-${{ matrix.subpkg }}.tar.gz" nsl
-          rm nsl
+          for bin in nsl nsld; do
+            cp "target/${{ matrix.target }}/release/${bin}" "${bin}"
+            chmod +x "${bin}"
+            tar -czf "dist/${bin}-${{ matrix.subpkg }}.tar.gz" "${bin}"
+            rm "${bin}"
+          done
 
       - uses: actions/upload-artifact@v7
         with:
           name: asset-${{ matrix.subpkg }}
-          path: dist/nsl-${{ matrix.subpkg }}.tar.gz
+          path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
@@ -132,19 +142,21 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }} --locked
 
-      - name: Package zip
+      - name: Package zips
         shell: bash
         run: |
           set -eu
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/nsl.exe" nsl.exe
-          7z a "dist/nsl-${{ matrix.subpkg }}.zip" nsl.exe
-          rm nsl.exe
+          for bin in nsl nsld; do
+            cp "target/${{ matrix.target }}/release/${bin}.exe" "${bin}.exe"
+            7z a "dist/${bin}-${{ matrix.subpkg }}.zip" "${bin}.exe"
+            rm "${bin}.exe"
+          done
 
       - uses: actions/upload-artifact@v7
         with:
           name: asset-${{ matrix.subpkg }}
-          path: dist/nsl-${{ matrix.subpkg }}.zip
+          path: dist/*.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -188,6 +200,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Both `nsl-*` (client) and `nsld-*` (server) archives ship.
           gh release create "${{ steps.tag.outputs.name }}" \
             --title "${{ steps.tag.outputs.name }}" \
             --generate-notes \

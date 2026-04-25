@@ -1,0 +1,99 @@
+name: docker
+
+# Builds the nsld multi-arch Docker image and pushes it to Docker Hub.
+#
+# Triggered AFTER `release.yml` has published a GitHub Release with
+# binary assets attached — we download the static-musl `nsld-linux-*`
+# tarballs from that release and just COPY the binaries into the
+# image. No Rust toolchain, no QEMU-emulated compilation; multi-arch
+# builds finish in a couple of minutes.
+#
+# Manual dispatch: pass an existing release tag whose assets are
+# already published.
+#
+# Required repo secrets:
+#   DOCKER_USER : Docker Hub account name
+#   DOCKER_PWD  : Docker Hub access token (Account Settings → Security)
+#
+# Image: docker.io/nsiod/nsld:<version> + :latest
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag whose assets to package (e.g. v0.1.5)"
+        required: true
+
+env:
+  IMAGE_NAME: nsiod/nsld
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = "release" ]; then
+            name="${{ github.event.release.tag_name }}"
+          else
+            name="${{ github.event.inputs.tag }}"
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Download nsld binaries from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          mkdir -p docker-context/linux-amd64 docker-context/linux-arm64 release-assets
+          gh release download "${{ steps.tag.outputs.name }}" \
+            --pattern 'nsld-linux-x64.tar.gz' \
+            --pattern 'nsld-linux-arm64.tar.gz' \
+            --dir release-assets
+          tar -xzf release-assets/nsld-linux-x64.tar.gz   -C docker-context/linux-amd64
+          tar -xzf release-assets/nsld-linux-arm64.tar.gz -C docker-context/linux-arm64
+          cp crates/nsld/Dockerfile docker-context/Dockerfile
+          ls -laR docker-context/
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.tag.outputs.name }}
+            type=raw,value=latest
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PWD }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: docker-context
+          file: docker-context/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false

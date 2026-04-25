@@ -64,62 +64,47 @@ fn test_render_page_escapes_status_text() {
 }
 
 #[test]
-fn test_render_not_found_body_no_routes() {
-    let body = render_not_found_body("test.localhost", &[]);
+fn test_render_not_found_body_mentions_status_command() {
+    let body = render_not_found_body("test.localhost");
     assert!(body.contains("test.localhost"));
-    assert!(body.contains("No active routes registered"));
+    assert!(body.contains("nsl status"));
 }
 
 #[test]
-fn test_render_not_found_body_with_routes() {
-    let routes = vec![
-        RouteMapping {
-            hostname: "app.localhost".to_string(),
-            port: 3000,
-            pid: 0,
-            change_origin: false,
-            path_prefix: "/".to_string(),
-            strip_prefix: false,
-            owner: None,
-        },
-        RouteMapping {
-            hostname: "api.localhost".to_string(),
-            port: 4000,
-            pid: 0,
-            change_origin: true,
-            path_prefix: "/api".to_string(),
-            strip_prefix: false,
-            owner: None,
-        },
-    ];
-    let body = render_not_found_body("unknown.localhost", &routes);
-    assert!(body.contains("app.localhost"));
-    assert!(body.contains("api.localhost"));
-    assert!(body.contains("port 3000"));
-    assert!(body.contains("port 4000"));
-    assert!(body.contains("changeOrigin"));
-    assert!(body.contains("/api"));
+fn test_render_not_found_body_does_not_leak_routes() {
+    let body = render_not_found_body("unknown.localhost");
+    assert!(!body.contains("app.localhost"));
+    assert!(!body.contains("api.localhost"));
+    assert!(!body.contains("port "));
+    assert!(!body.contains("changeOrigin"));
 }
 
 #[test]
 fn test_render_not_found_body_escapes_hostname() {
-    let body = render_not_found_body("<script>xss</script>", &[]);
+    let body = render_not_found_body("<script>xss</script>");
     assert!(!body.contains("<script>xss</script>"));
     assert!(body.contains("&lt;script&gt;"));
 }
 
 #[test]
 fn test_render_bad_gateway_body() {
-    let body = render_bad_gateway_body("myapp.localhost", 3000);
+    let body = render_bad_gateway_body("myapp.localhost");
     assert!(body.contains("myapp.localhost"));
-    assert!(body.contains("3000"));
     assert!(body.contains("not responding"));
     assert!(body.contains("Troubleshooting"));
+    assert!(body.contains("nsl status"));
+}
+
+#[test]
+fn test_render_bad_gateway_body_does_not_leak_port() {
+    let body = render_bad_gateway_body("myapp.localhost");
+    assert!(!body.contains("3000"));
+    assert!(!body.contains("port 3000"));
 }
 
 #[test]
 fn test_render_bad_gateway_body_escapes_hostname() {
-    let body = render_bad_gateway_body("<img onerror=alert(1)>", 3000);
+    let body = render_bad_gateway_body("<img onerror=alert(1)>");
     assert!(!body.contains("<img onerror"));
     assert!(body.contains("&lt;img onerror"));
 }

@@ -1,4 +1,3 @@
-use std::sync::Arc;
 
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
@@ -184,7 +183,7 @@ pub(super) async fn handle_request(
     proxy_port: u16,
     max_hops: u32,
     route_cache: RouteCache,
-    domains: Arc<Vec<String>>,
+    domains: crate::tunnel::SharedDomains,
     is_tls: bool,
 ) -> Result<Response<ProxyBody>, hyper::Error> {
     let host = extract_host(&req);
@@ -205,9 +204,15 @@ pub(super) async fn handle_request(
     let routes = route_cache.read().await.clone();
     let req_path = req.uri().path().to_string();
 
-    let route = find_route(&host, &req_path, &routes, &domains);
+    // Snapshot the mutable allow-list for the duration of this request
+    // so we don't hold the lock across awaits.
+    let domains_snapshot: Vec<String> = domains
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let route = find_route(&host, &req_path, &routes, &domains_snapshot);
     let Some(route) = route else {
-        let body_html = pages::render_not_found_body(&host, &routes);
+        let body_html = pages::render_not_found_body(&host);
         let html = pages::render_page(404, "Not Found", &body_html);
         return Ok(html_response(StatusCode::NOT_FOUND, &html));
     };
@@ -264,7 +269,7 @@ pub(super) async fn handle_request(
             }
         }
         Err(_) => {
-            let body_html = pages::render_bad_gateway_body(&host, route.port);
+            let body_html = pages::render_bad_gateway_body(&host);
             let html = pages::render_page(502, "Bad Gateway", &body_html);
             Ok(html_response(StatusCode::BAD_GATEWAY, &html))
         }

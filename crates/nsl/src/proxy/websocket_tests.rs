@@ -44,7 +44,7 @@ async fn test_websocket_upgrade_end_to_end() {
                         proxy_port,
                         10,
                         cache,
-                        Arc::new(vec!["localhost".to_string()]),
+                        Arc::new(std::sync::RwLock::new(vec!["localhost".to_string()])),
                         false,
                     )
                     .await
@@ -173,7 +173,7 @@ async fn test_websocket_upgrade_backend_rejects() {
                         proxy_port,
                         10,
                         cache,
-                        Arc::new(vec!["localhost".to_string()]),
+                        Arc::new(std::sync::RwLock::new(vec!["localhost".to_string()])),
                         false,
                     )
                     .await
@@ -262,7 +262,7 @@ async fn test_websocket_upgrade_loop_detection() {
                         proxy_port,
                         3,
                         cache,
-                        Arc::new(vec!["localhost".to_string()]),
+                        Arc::new(std::sync::RwLock::new(vec!["localhost".to_string()])),
                         false,
                     )
                     .await

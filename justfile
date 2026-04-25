@@ -87,3 +87,15 @@ npm-stage-local:
 npm-pack-dry: npm-sync npm-stage-local
     cd npm/linux-x64 && npm pack --dry-run
     cd npm/nsl && npm pack --dry-run
+
+# ─── Docker (nsld server image) ───────────────────────────────────────
+
+# Build a host-arch nsld image from source via Dockerfile.local. No
+# QEMU, no multi-arch staging — purely for local sanity-check.
+docker-build-local:
+    docker build -f crates/nsld/Dockerfile.local -t nsld:local .
+
+# Smoke-run the local image — prints the resolved config and exits.
+docker-run-local: docker-build-local
+    mkdir -p data
+    docker run --rm -v "$(pwd)/data:/data" nsld:local config || true

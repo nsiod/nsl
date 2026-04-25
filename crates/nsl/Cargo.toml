@@ -1,0 +1,58 @@
+[package]
+name = "nsl"
+description = "Replace port numbers with stable, named .localhost URLs. For humans and agents."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["local", "development", "proxy", "localhost"]
+categories = ["command-line-utilities", "development-tools", "web-programming::http-server"]
+
+[[bin]]
+name = "nsl"
+path = "src/main.rs"
+
+[dependencies]
+tunnel = { path = "../tunnel" }
+tokio.workspace = true
+tokio-util.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json = "1"
+toml.workspace = true
+clap.workspace = true
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+dirs = "6"
+process-wrap = { version = "9.1.0", features = ["tokio1"] }
+rcgen.workspace = true
+rustls.workspace = true
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls-pemfile.workspace = true
+x509-parser = "0.18.1"
+time = "0.3"
+bytes = "1"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.2", features = ["signal", "process", "user", "fs"] }
+daemonize = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Threading",
+  "Win32_Security",
+] }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile.workspace = true
+tokio-test = "0.4"

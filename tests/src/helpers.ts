@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const NSL_BIN = process.env.NSL_BIN ?? "nsl";
+export const NSLD_BIN = process.env.NSLD_BIN ?? "nsld";
 
 // -------------------------------------------------------------------------
 // State directory isolation
@@ -25,11 +26,16 @@ export function cleanupStateDir(dir: string) {
 // NSL CLI wrappers
 // -------------------------------------------------------------------------
 
-export function nslEnv(stateDir: string, proxyPort: number) {
+export function nslEnv(
+  stateDir: string,
+  proxyPort: number,
+  extraEnv?: Record<string, string>,
+) {
   return {
     ...process.env,
     NSL_STATE_DIR: stateDir,
     NSL_LISTEN: `127.0.0.1:${proxyPort}`,
+    ...extraEnv,
   };
 }
 
@@ -38,9 +44,10 @@ export async function nsl(
   args: string[],
   stateDir: string,
   proxyPort: number,
+  extraEnv?: Record<string, string>,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = spawn([NSL_BIN, ...args], {
-    env: nslEnv(stateDir, proxyPort),
+    env: nslEnv(stateDir, proxyPort, extraEnv),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -58,9 +65,13 @@ export async function nsl(
 
 let proxyProc: Subprocess | null = null;
 
-export async function startProxy(stateDir: string, port: number) {
+export async function startProxy(
+  stateDir: string,
+  port: number,
+  extraEnv?: Record<string, string>,
+) {
   proxyProc = spawn([NSL_BIN, "start", "--foreground"], {
-    env: nslEnv(stateDir, port),
+    env: nslEnv(stateDir, port, extraEnv),
     stdout: "pipe",
     stderr: "pipe",
   });

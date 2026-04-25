@@ -1,6 +1,6 @@
 use crate::config;
 
-use super::{Cli, Commands, HostsAction, apply_cli_overrides};
+use super::{Cli, Commands, HostsAction, TunnelAction, apply_cli_overrides};
 
 async fn start_proxy(config: &crate::config::Config, foreground: bool) -> anyhow::Result<()> {
     if foreground {
@@ -254,6 +254,29 @@ pub(super) async fn handle(cli: Cli) -> anyhow::Result<()> {
                     }
                     Err(e) => return Err(e.into()),
                 }
+                Ok(())
+            }
+        },
+        Commands::Tunnel { action } => match action {
+            TunnelAction::Connect {
+                endpoint,
+                id,
+                key,
+            } => {
+                if let Some(v) = endpoint {
+                    config.tunnel.endpoint = Some(v);
+                }
+                if let Some(v) = id {
+                    config.tunnel.id = Some(v);
+                }
+                if let Some(v) = key {
+                    config.tunnel.key = Some(v);
+                }
+                config.tunnel.enable = true;
+                crate::tunnel::connect_once(&config).await
+            }
+            TunnelAction::Status => {
+                crate::tunnel::print_status(&config);
                 Ok(())
             }
         },

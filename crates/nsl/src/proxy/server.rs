@@ -132,10 +132,26 @@ pub async fn start_proxy(config: &Config) -> anyhow::Result<()> {
     // Initialize the in-memory route cache with current disk state
     let initial_routes = load_routes_from_disk(&state_dir);
     let route_cache: RouteCache = Arc::new(tokio::sync::RwLock::new(initial_routes));
-    let domains: Arc<Vec<String>> = Arc::new(config.domains.clone());
+    // Mutable allow-list: starts with the configured static domains and
+    // gets extended at runtime when the tunnel server assigns a tenant
+    // domain to this client.
+    let domains: crate::tunnel::SharedDomains =
+        Arc::new(std::sync::RwLock::new(config.domains.clone()));
 
     // Spawn background task that polls routes.json for changes
     let poller_handle = spawn_route_poller(state_dir.clone(), Arc::clone(&route_cache));
+
+    // Spawn QUIC tunnel client if enabled. Runs for the lifetime of
+    // the daemon and handles its own reconnect/backoff. `tunnel_cancel`
+    // is triggered on shutdown to break the reconnect loop cleanly.
+    let tunnel_cancel = tokio_util::sync::CancellationToken::new();
+    let tunnel_handle =
+        crate::tunnel::spawn_client_task(config, Arc::clone(&domains), tunnel_cancel.clone());
+    if tunnel_handle.is_some()
+        && let Some(ref id) = config.tunnel.id
+    {
+        tracing::info!("tunnel client enabled for id {}", id);
+    }
 
     let proto = if config.proxy_https { "https" } else { "http" };
     tracing::info!("proxy listening on {}://{}:{}", proto, addr.ip(), port);
@@ -198,6 +214,11 @@ pub async fn start_proxy(config: &Config) -> anyhow::Result<()> {
 
     // Stop the background poller
     poller_handle.abort();
+    // Signal the tunnel client to close cleanly; wait briefly for it.
+    tunnel_cancel.cancel();
+    if let Some(h) = tunnel_handle {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), h).await;
+    }
 
     // Ensure cleanup on normal exit
     cleanup_lifecycle_files(&state_dir);
@@ -213,7 +234,7 @@ async fn handle_connection_with_tls(
     port: u16,
     max_hops: u32,
     route_cache: RouteCache,
-    domains: Arc<Vec<String>>,
+    domains: crate::tunnel::SharedDomains,
 ) {
     let mut peek_buf = [0u8; 1];
     match stream.peek(&mut peek_buf).await {
@@ -249,7 +270,7 @@ async fn serve_http<I>(
     port: u16,
     max_hops: u32,
     route_cache: RouteCache,
-    domains: Arc<Vec<String>>,
+    domains: crate::tunnel::SharedDomains,
     is_tls: bool,
 ) where
     I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
