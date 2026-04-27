@@ -196,8 +196,7 @@ where
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "forward-auth probe failed; failing closed");
-                    let _ =
-                        write_error_response(&mut stream, 502, "Bad Gateway").await;
+                    let _ = write_error_response(&mut stream, 502, "Bad Gateway").await;
                     return Err(e);
                 }
             }

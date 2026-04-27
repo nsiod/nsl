@@ -258,11 +258,7 @@ pub(super) async fn handle(cli: Cli) -> anyhow::Result<()> {
             }
         },
         Commands::Tunnel { action } => match action {
-            TunnelAction::Connect {
-                endpoint,
-                id,
-                key,
-            } => {
+            TunnelAction::Connect { endpoint, id, key } => {
                 if let Some(v) = endpoint {
                     config.tunnel.endpoint = Some(v);
                 }

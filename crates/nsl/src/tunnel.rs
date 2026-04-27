@@ -75,10 +75,9 @@ pub fn print_status(config: &Config) {
 }
 
 fn build_client_tunnel(t: &TunnelConfig) -> Result<::tunnel::ClientTunnel> {
-    let id = t
-        .id
-        .clone()
-        .ok_or_else(|| anyhow!("tunnel.id is required"))?;
+    let id =
+        t.id.clone()
+            .ok_or_else(|| anyhow!("tunnel.id is required"))?;
     let key = t
         .key
         .clone()

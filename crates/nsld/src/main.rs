@@ -231,7 +231,8 @@ async fn run_all(cfg: Resolved) -> Result<()> {
 
     // Forward-auth gate client (optional). When Some, wired into the
     // Route-mode public listeners; Redirect-mode listeners skip it.
-    let forward_auth_client: Option<Arc<forward_auth::ForwardAuthClient>> = match &cfg.forward_auth {
+    let forward_auth_client: Option<Arc<forward_auth::ForwardAuthClient>> = match &cfg.forward_auth
+    {
         Some(settings) => {
             let fwd_cfg = forward_auth::ForwardAuthConfig::new(
                 settings.address.clone(),

@@ -70,13 +70,7 @@ impl TokenStore {
             if id.is_empty() || domain.is_empty() || t.key.is_empty() {
                 continue;
             }
-            by_id.insert(
-                id,
-                TokenEntry {
-                    domain,
-                    key: t.key,
-                },
-            );
+            by_id.insert(id, TokenEntry { domain, key: t.key });
         }
         Ok(Self { by_id })
     }

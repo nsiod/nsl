@@ -1,4 +1,3 @@
-
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
@@ -206,10 +205,7 @@ pub(super) async fn handle_request(
 
     // Snapshot the mutable allow-list for the duration of this request
     // so we don't hold the lock across awaits.
-    let domains_snapshot: Vec<String> = domains
-        .read()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let domains_snapshot: Vec<String> = domains.read().map(|g| g.clone()).unwrap_or_default();
     let route = find_route(&host, &req_path, &routes, &domains_snapshot);
     let Some(route) = route else {
         let body_html = pages::render_not_found_body(&host);

@@ -36,12 +36,7 @@ impl ClientTunnel {
     /// or `sha256:` prefixed). `endpoint` is required — we no longer
     /// derive it from the tenant domain because the client doesn't
     /// know its tenant domain until the server assigns one.
-    pub fn new(
-        client_id: String,
-        key: String,
-        endpoint: String,
-        server_id: &str,
-    ) -> Result<Self> {
+    pub fn new(client_id: String, key: String, endpoint: String, server_id: &str) -> Result<Self> {
         if client_id.trim().is_empty() {
             return Err(anyhow!("tunnel.id is required"));
         }
@@ -139,9 +134,7 @@ mod tests {
 
     #[test]
     fn client_requires_id() {
-        assert!(
-            ClientTunnel::new("".into(), "k".into(), "t.example.com:443".into(), FP).is_err()
-        );
+        assert!(ClientTunnel::new("".into(), "k".into(), "t.example.com:443".into(), FP).is_err());
     }
 
     #[test]
@@ -159,8 +152,13 @@ mod tests {
     #[test]
     fn client_requires_valid_fingerprint() {
         assert!(
-            ClientTunnel::new("alice".into(), "k".into(), "t.example.com:443".into(), "zzzz")
-                .is_err()
+            ClientTunnel::new(
+                "alice".into(),
+                "k".into(),
+                "t.example.com:443".into(),
+                "zzzz"
+            )
+            .is_err()
         );
         assert!(
             ClientTunnel::new("alice".into(), "k".into(), "t.example.com:443".into(), "").is_err()

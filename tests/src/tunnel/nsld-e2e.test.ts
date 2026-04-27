@@ -15,7 +15,8 @@ import {
 } from "../helpers";
 
 const BASE_DOMAIN = "nsl.test";
-const TENANT_DOMAIN = `alice.${BASE_DOMAIN}`;
+const TENANT_ID = "alice";
+const TENANT_DOMAIN = `${TENANT_ID}.${BASE_DOMAIN}`;
 const PUBLIC_HOST = `myapp.${TENANT_DOMAIN}`;
 const TOKEN = "nslk_test_secret";
 
@@ -37,7 +38,7 @@ describe("nsl client through nsld", () => {
 
     writeFileSync(
       join(nsldStateDir, "tokens.toml"),
-      `[[tokens]]
+      `[tokens.${TENANT_ID}]
 domain = "${TENANT_DOMAIN}"
 key = "${TOKEN}"
 `,
@@ -74,7 +75,7 @@ enable = false
     await startProxy(nslStateDir, proxyPort, {
       NSL_DOMAINS: `localhost,${TENANT_DOMAIN}`,
       NSL_TUNNEL_ENABLE: "1",
-      NSL_TUNNEL_DOMAIN: TENANT_DOMAIN,
+      NSL_TUNNEL_ID: TENANT_ID,
       NSL_TUNNEL_KEY: TOKEN,
       NSL_TUNNEL_ENDPOINT: `127.0.0.1:${quicPort}`,
       NSL_TUNNEL_SERVER_ID: serverId,

@@ -222,12 +222,7 @@ impl ForwardAuthClient {
             let lname = name.as_str().to_ascii_lowercase();
             if matches!(
                 lname.as_str(),
-                "connection"
-                    | "keep-alive"
-                    | "te"
-                    | "trailer"
-                    | "transfer-encoding"
-                    | "upgrade"
+                "connection" | "keep-alive" | "te" | "trailer" | "transfer-encoding" | "upgrade"
             ) {
                 continue;
             }
@@ -300,10 +295,7 @@ mod tests {
         let mut buf = vec![0u8; 16 * 1024];
         let n = stream.read(&mut buf).await.unwrap();
         captured.lock().unwrap().extend_from_slice(&buf[..n]);
-        let mut resp = format!(
-            "HTTP/1.1 {status}\r\nContent-Length: {}\r\n",
-            body.len()
-        );
+        let mut resp = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n", body.len());
         for h in extra_headers {
             resp.push_str(h);
             resp.push_str("\r\n");
